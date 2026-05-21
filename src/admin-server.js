@@ -1,9 +1,10 @@
 import { createServer } from "node:http";
+import { unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import { BambuMqttClient } from "./bambu.js";
 import { CLOUD_REGIONS, loadCloudToken, loginWithCode, loginWithPassword, loginWithTfa, saveCloudToken } from "./cloud-auth.js";
 import { loadConfig } from "./config.js";
-import { loadStoredConfig, maskConfig, mergeConfig, saveStoredConfig } from "./config-store.js";
+import { loadStoredConfig, maskConfig, mergeConfig, resetStoredConfig, saveStoredConfig } from "./config-store.js";
 import { createLogger } from "./logger.js";
 import { NotionAmsSync } from "./notion-sync.js";
 
@@ -36,6 +37,14 @@ function parseBody(req) {
       }
     });
   });
+}
+
+async function removeIfExists(file) {
+  try {
+    await unlink(file);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
 }
 
 class SyncRuntime {
@@ -85,6 +94,13 @@ class SyncRuntime {
     this.bambuClient = null;
     this.notionSync = null;
     this.running = false;
+  }
+
+  async reset() {
+    await this.stop();
+    this.lastError = "";
+    this.lastSyncAt = "";
+    this.lastTrayCount = 0;
   }
 
   manualSync() {
@@ -238,6 +254,14 @@ function page() {
       </form>
       <div id="devices"></div>
     </section>
+
+    <section>
+      <h2>重置</h2>
+      <p>清空本服务保存的 Web 配置和 Bambu Cloud 登录，用于模拟首次使用；不会删除 Notion 里的数据库或页面。</p>
+      <div class="buttons" style="margin-top:12px">
+        <button id="resetApp" class="danger">重置为新用户</button>
+      </div>
+    </section>
   </main>
 
   <script>
@@ -344,6 +368,28 @@ function page() {
         setStatus("正在重启同步服务...", "warn");
         await api("/api/restart", {});
         await refresh();
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    });
+
+    document.querySelector("#resetApp").addEventListener("click", async () => {
+      const confirmation = window.prompt("二次确认：输入 RESET 清空本机配置和 Bambu Cloud token。不会删除 Notion 数据。");
+      if (confirmation !== "RESET") {
+        setStatus("已取消重置。", "warn");
+        return;
+      }
+
+      try {
+        setStatus("正在重置...", "warn");
+        await api("/api/reset", { confirmation });
+        loginForm.reset();
+        codeForm.reset();
+        tfaForm.reset();
+        codeForm.style.display = "none";
+        tfaForm.style.display = "none";
+        await refresh();
+        setStatus("已清空本机配置和 Bambu Cloud token，可以按新用户流程重新开始。", "warn");
       } catch (error) {
         setStatus(error.message, "bad");
       }
@@ -457,6 +503,23 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === "/api/sync" && req.method === "POST") {
       sendJson(res, 200, runtime.manualSync());
+      return;
+    }
+
+    if (pathname === "/api/reset" && req.method === "POST") {
+      if (body.confirmation !== "RESET") {
+        sendJson(res, 400, { error: "Type RESET to confirm reset" });
+        return;
+      }
+
+      const existing = await loadStoredConfig();
+      const tokenFile = resolve(existing.BAMBU_CLOUD_TOKEN_FILE || ".bambu-cloud.json");
+      await runtime.reset();
+      await removeIfExists(tokenFile);
+      await resetStoredConfig({
+        BAMBU_CLOUD_TOKEN_FILE: existing.BAMBU_CLOUD_TOKEN_FILE || ".bambu-cloud.json"
+      });
+      sendJson(res, 200, { ok: true, runtime: runtime.status() });
       return;
     }
 

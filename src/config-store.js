@@ -55,6 +55,10 @@ export async function saveStoredConfig(config) {
   return sanitized;
 }
 
+export async function resetStoredConfig(preserve = {}) {
+  return saveStoredConfig({ ...DEFAULTS, ...preserve });
+}
+
 export function maskConfig(config) {
   const masked = { ...config };
   for (const key of SECRET_KEYS) {

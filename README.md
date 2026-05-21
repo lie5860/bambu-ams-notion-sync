@@ -101,6 +101,14 @@ docker compose down
 打开 http://localhost:3030，点击「立即同步」
 ```
 
+模拟新用户：
+
+```text
+打开 http://localhost:3030，点击「重置为新用户」，二次确认输入 RESET
+```
+
+这个操作会清空 Web 控制台保存的配置和 Bambu Cloud token，并停止同步服务；不会删除 Notion 里的数据库或页面。
+
 同步周期默认是 `600000` 毫秒，也就是 10 分钟。可以在网页的 `同步周期` 里修改。
 
 ## 本地开发
