@@ -157,6 +157,8 @@ function page() {
     .status.warn { color:var(--warn); background:#fff8eb; border-color:#f2d5a3; }
     .status.bad { color:var(--bad); background:#fff4f3; border-color:#f3b8b2; }
     .device { border:1px solid var(--line); border-radius:6px; padding:10px 12px; display:grid; gap:4px; font-size:13px; margin-top:10px; }
+    .confirm { display:none; gap:12px; margin-top:12px; border:1px solid #f3b8b2; background:#fff4f3; border-radius:6px; padding:12px; }
+    .confirm.active { display:grid; }
     code { font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     @media (max-width:720px){ .grid{grid-template-columns:1fr;} }
   </style>
@@ -259,7 +261,16 @@ function page() {
       <h2>重置</h2>
       <p>清空本服务保存的 Web 配置和 Bambu Cloud 登录，用于模拟首次使用；不会删除 Notion 里的数据库或页面。</p>
       <div class="buttons" style="margin-top:12px">
-        <button id="resetApp" class="danger">重置为新用户</button>
+        <button id="resetApp" class="danger">重置</button>
+      </div>
+      <div id="resetConfirm" class="confirm">
+        <label>二次确认
+          <input id="resetConfirmText" autocomplete="off" placeholder="输入 RESET">
+        </label>
+        <div class="buttons">
+          <button id="confirmResetApp" class="danger">确认重置</button>
+          <button id="cancelResetApp" class="secondary">取消</button>
+        </div>
       </div>
     </section>
   </main>
@@ -271,6 +282,8 @@ function page() {
     const codeForm = document.querySelector("#codeForm");
     const tfaForm = document.querySelector("#tfaForm");
     const devicesEl = document.querySelector("#devices");
+    const resetConfirm = document.querySelector("#resetConfirm");
+    const resetConfirmText = document.querySelector("#resetConfirmText");
     let pendingTfaKey = "";
 
     function setStatus(text, kind = "") {
@@ -374,12 +387,20 @@ function page() {
     });
 
     document.querySelector("#resetApp").addEventListener("click", async () => {
-      const confirmation = window.prompt("二次确认：输入 RESET 清空本机配置和 Bambu Cloud token。不会删除 Notion 数据。");
-      if (confirmation !== "RESET") {
-        setStatus("已取消重置。", "warn");
-        return;
-      }
+      resetConfirm.classList.add("active");
+      resetConfirmText.value = "";
+      resetConfirmText.focus();
+      setStatus("输入 RESET 后再确认重置。不会删除 Notion 数据。", "warn");
+    });
 
+    document.querySelector("#cancelResetApp").addEventListener("click", () => {
+      resetConfirm.classList.remove("active");
+      resetConfirmText.value = "";
+      setStatus("已取消重置。", "warn");
+    });
+
+    document.querySelector("#confirmResetApp").addEventListener("click", async () => {
+      const confirmation = resetConfirmText.value.trim();
       try {
         setStatus("正在重置...", "warn");
         await api("/api/reset", { confirmation });
@@ -388,6 +409,8 @@ function page() {
         tfaForm.reset();
         codeForm.style.display = "none";
         tfaForm.style.display = "none";
+        resetConfirm.classList.remove("active");
+        resetConfirmText.value = "";
         await refresh();
         setStatus("已清空本机配置和 Bambu Cloud token，可以按新用户流程重新开始。", "warn");
       } catch (error) {

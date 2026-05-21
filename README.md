@@ -104,7 +104,7 @@ docker compose down
 模拟新用户：
 
 ```text
-打开 http://localhost:3030，点击「重置为新用户」，二次确认输入 RESET
+打开 http://localhost:3030，点击「重置」，二次确认输入 RESET
 ```
 
 这个操作会清空 Web 控制台保存的配置和 Bambu Cloud token，并停止同步服务；不会删除 Notion 里的数据库或页面。
