@@ -95,6 +95,7 @@ export class BambuMqttClient {
     this.debounceTimer = null;
     this.lastTrays = [];
     this.sequence = 0;
+    this.connected = false;
   }
 
   start() {
@@ -110,6 +111,7 @@ export class BambuMqttClient {
     });
 
     this.client.on("connect", () => {
+      this.connected = true;
       this.logger.info(`Connected to Bambu MQTT at ${url}`);
       this.client.subscribe(reportTopic, (error) => {
         if (error) {
@@ -129,7 +131,10 @@ export class BambuMqttClient {
 
     this.client.on("message", (_topic, payload) => this.handleMessage(payload));
     this.client.on("error", (error) => this.logger.error("MQTT error:", error.message));
-    this.client.on("close", () => this.logger.warn("MQTT connection closed"));
+    this.client.on("close", () => {
+      this.connected = false;
+      this.logger.warn("MQTT connection closed");
+    });
     this.client.on("reconnect", () => this.logger.info("Reconnecting to Bambu MQTT..."));
   }
 
@@ -153,8 +158,8 @@ export class BambuMqttClient {
     };
   }
 
-  requestPushAll() {
-    if (!this.client?.connected) return;
+  requestPushAll(reason = "scheduled") {
+    if (!this.client?.connected) return false;
     const requestTopic = `device/${this.config.printerSerial}/request`;
     const sequenceId = String(++this.sequence);
     const payload = {
@@ -166,8 +171,13 @@ export class BambuMqttClient {
       }
     };
 
-    this.logger.debug("Requesting full printer status via pushall");
+    this.logger.info(`Requesting full printer status via pushall (${reason})`);
     this.client.publish(requestTopic, JSON.stringify(payload));
+    return true;
+  }
+
+  requestManualSync() {
+    return this.requestPushAll("manual");
   }
 
   handleMessage(payload) {
@@ -197,6 +207,16 @@ export class BambuMqttClient {
   stop() {
     clearInterval(this.pushAllTimer);
     clearTimeout(this.debounceTimer);
+    this.connected = false;
     this.client?.end(true);
+  }
+
+  status() {
+    return {
+      connected: this.connected,
+      printerSerial: this.config.printerSerial,
+      connectionMode: this.config.connectionMode,
+      lastTrayCount: this.lastTrays.length
+    };
   }
 }

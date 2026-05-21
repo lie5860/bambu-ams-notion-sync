@@ -78,7 +78,15 @@ export class NotionAmsSync {
       this.logger.info(`Resolved Notion database ${id} to data source ${dataSourceId}`);
       return this.client.dataSources.retrieve({ data_source_id: dataSourceId });
     } catch (error) {
-      if (!this.looksLikePageInsteadOfDatabase(error)) throw error;
+      if (!this.looksLikePageInsteadOfDatabase(error) && !this.looksLikeObjectNotFound(error)) throw error;
+    }
+
+    try {
+      await this.client.pages.retrieve({ page_id: id });
+    } catch {
+      throw new Error(
+        `Cannot find Notion target ${id}. Share the page/database with your Notion integration, then restart the sync service.`
+      );
     }
 
     return this.ensureAmsDataSourceOnPage(id);

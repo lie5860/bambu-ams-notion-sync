@@ -2,5 +2,14 @@ services:
   bambu-ams-notion-sync:
     build: .
     container_name: bambu-ams-notion-sync
-    env_file: .env
+    ports:
+      - "3030:3030"
+    environment:
+      ADMIN_HOST: 0.0.0.0
+      ADMIN_PORT: 3030
+      APP_CONFIG_FILE: /app/data/app-config.json
+      BAMBU_CLOUD_TOKEN_FILE: /app/data/bambu-cloud.json
+      LOG_LEVEL: info
+    volumes:
+      - ./data:/app/data
     restart: unless-stopped

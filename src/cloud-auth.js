@@ -1,4 +1,5 @@
-import { chmod, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 export const CLOUD_REGIONS = {
   global: {
@@ -168,6 +169,7 @@ export async function loginWithTfa({ region, tfaKey, tfaCode }) {
 }
 
 export async function saveCloudToken(tokenFile, tokenData) {
+  await mkdir(dirname(tokenFile), { recursive: true });
   await writeFile(tokenFile, `${JSON.stringify(tokenData, null, 2)}\n`, { mode: 0o600 });
   await chmod(tokenFile, 0o600);
 }

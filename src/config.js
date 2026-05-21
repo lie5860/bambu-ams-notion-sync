@@ -3,24 +3,40 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 function required(name) {
-  const value = process.env[name]?.trim();
+  return requiredFrom(process.env, name);
+}
+
+function requiredFrom(source, name) {
+  const value = source[name]?.trim();
   if (!value) throw new Error(`Missing required env: ${name}`);
   return value;
 }
 
 function optional(name, fallback = "") {
-  const value = process.env[name];
+  return optionalFrom(process.env, name, fallback);
+}
+
+function optionalFrom(source, name, fallback = "") {
+  const value = source[name];
   return value == null || value === "" ? fallback : value.trim();
 }
 
 function bool(name, fallback = false) {
-  const value = process.env[name];
+  return boolFrom(process.env, name, fallback);
+}
+
+function boolFrom(source, name, fallback = false) {
+  const value = source[name];
   if (value == null || value === "") return fallback;
   return ["1", "true", "yes", "y", "on"].includes(value.toLowerCase());
 }
 
 function int(name, fallback) {
-  const value = process.env[name];
+  return intFrom(process.env, name, fallback);
+}
+
+function intFrom(source, name, fallback) {
+  const value = source[name];
   if (value == null || value === "") return fallback;
   const parsed = Number.parseInt(value, 10);
   if (Number.isNaN(parsed)) throw new Error(`${name} must be an integer`);
@@ -28,14 +44,22 @@ function int(name, fallback) {
 }
 
 function csv(name, fallback) {
-  return optional(name, fallback)
+  return csvFrom(process.env, name, fallback);
+}
+
+function csvFrom(source, name, fallback) {
+  return optionalFrom(source, name, fallback)
     .split(",")
     .map((part) => part.trim())
     .filter(Boolean);
 }
 
 function notionId(name) {
-  const raw = required(name);
+  return notionIdFrom(process.env, name);
+}
+
+function notionIdFrom(source, name) {
+  const raw = requiredFrom(source, name);
   const compact = raw.replace(/-/g, "");
   const match = compact.match(/[0-9a-fA-F]{32}(?!.*[0-9a-fA-F]{32})/);
   if (!match) {
@@ -49,26 +73,26 @@ function loadCloudToken(tokenFile) {
   try {
     return JSON.parse(readFileSync(tokenFile, "utf8"));
   } catch (error) {
-    throw new Error(`Cannot read Bambu cloud token file "${tokenFile}". Run npm run cloud:login first.`);
+    throw new Error(`Cannot read Bambu cloud token file "${tokenFile}". Log in from the Web console first.`);
   }
 }
 
-export function loadConfig() {
-  const connectionMode = optional("BAMBU_CONNECTION_MODE", "cloud").toLowerCase();
+export function loadConfig(source = process.env) {
+  const connectionMode = optionalFrom(source, "BAMBU_CONNECTION_MODE", "cloud").toLowerCase();
   if (!["local", "cloud"].includes(connectionMode)) {
     throw new Error("BAMBU_CONNECTION_MODE must be local or cloud");
   }
 
-  const cloudTokenFile = resolve(optional("BAMBU_CLOUD_TOKEN_FILE", ".bambu-cloud.json"));
+  const cloudTokenFile = resolve(optionalFrom(source, "BAMBU_CLOUD_TOKEN_FILE", ".bambu-cloud.json"));
   const cloudToken = connectionMode === "cloud" ? loadCloudToken(cloudTokenFile) : null;
 
   return {
     bambu: {
       connectionMode,
-      printerIp: connectionMode === "local" ? required("BAMBU_PRINTER_IP") : optional("BAMBU_PRINTER_IP"),
-      printerSerial: required("BAMBU_PRINTER_SERIAL"),
-      accessCode: connectionMode === "local" ? required("BAMBU_ACCESS_CODE") : optional("BAMBU_ACCESS_CODE"),
-      printerName: optional("BAMBU_PRINTER_NAME", optional("BAMBU_PRINTER_SERIAL")),
+      printerIp: connectionMode === "local" ? requiredFrom(source, "BAMBU_PRINTER_IP") : optionalFrom(source, "BAMBU_PRINTER_IP"),
+      printerSerial: requiredFrom(source, "BAMBU_PRINTER_SERIAL"),
+      accessCode: connectionMode === "local" ? requiredFrom(source, "BAMBU_ACCESS_CODE") : optionalFrom(source, "BAMBU_ACCESS_CODE"),
+      printerName: optionalFrom(source, "BAMBU_PRINTER_NAME", optionalFrom(source, "BAMBU_PRINTER_SERIAL")),
       cloudTokenFile,
       cloud: cloudToken
         ? {
@@ -78,38 +102,38 @@ export function loadConfig() {
             accessToken: cloudToken.accessToken
           }
         : null,
-      uidFields: csv("BAMBU_UID_FIELDS", "tag_uid,tray_uuid"),
-      defaultSpoolWeightGrams: int("DEFAULT_SPOOL_WEIGHT_GRAMS", 1000),
-      correctRemainForTrayWeight: bool("CORRECT_REMAIN_FOR_TRAY_WEIGHT", true),
-      pushAllOnStart: bool("PUSHALL_ON_START", true),
-      pushAllIntervalMs: int("PUSHALL_INTERVAL_MS", 300000),
-      syncDebounceMs: int("SYNC_DEBOUNCE_MS", 3000),
-      rejectUnauthorized: bool("MQTT_REJECT_UNAUTHORIZED", connectionMode === "cloud")
+      uidFields: csvFrom(source, "BAMBU_UID_FIELDS", "tag_uid,tray_uuid"),
+      defaultSpoolWeightGrams: intFrom(source, "DEFAULT_SPOOL_WEIGHT_GRAMS", 1000),
+      correctRemainForTrayWeight: boolFrom(source, "CORRECT_REMAIN_FOR_TRAY_WEIGHT", true),
+      pushAllOnStart: boolFrom(source, "PUSHALL_ON_START", true),
+      pushAllIntervalMs: intFrom(source, "PUSHALL_INTERVAL_MS", 600000),
+      syncDebounceMs: intFrom(source, "SYNC_DEBOUNCE_MS", 3000),
+      rejectUnauthorized: boolFrom(source, "MQTT_REJECT_UNAUTHORIZED", connectionMode === "cloud")
     },
     notion: {
-      token: required("NOTION_TOKEN"),
-      dataSourceId: notionId("NOTION_DATA_SOURCE_ID"),
-      amsDatabaseName: optional("NOTION_AMS_DATABASE_NAME", "AMS 耗材"),
+      token: requiredFrom(source, "NOTION_TOKEN"),
+      dataSourceId: notionIdFrom(source, "NOTION_DATA_SOURCE_ID"),
+      amsDatabaseName: optionalFrom(source, "NOTION_AMS_DATABASE_NAME", "AMS 耗材"),
       properties: {
-        amsUid: optional("NOTION_AMS_UID_PROP", "RFID Tag UID"),
-        remainPercent: optional("NOTION_REMAIN_PERCENT_PROP", "余量%"),
-        remainGrams: optional("NOTION_REMAIN_GRAMS_PROP", "剩余克数"),
-        amsSlot: optional("NOTION_AMS_SLOT_PROP"),
-        loaded: optional("NOTION_LOADED_PROP"),
-        lastSync: optional("NOTION_LAST_SYNC_PROP", "最后同步时间"),
-        printer: optional("NOTION_PRINTER_PROP"),
-        material: optional("NOTION_MATERIAL_PROP", "材料"),
-        color: optional("NOTION_COLOR_PROP", "颜色"),
-        tagUid: optional("NOTION_TAG_UID_PROP"),
-        trayUuid: optional("NOTION_TRAY_UUID_PROP", "Tray UUID"),
-        trayWeight: optional("NOTION_TRAY_WEIGHT_PROP", "料盘重量g"),
-        title: optional("NOTION_TITLE_PROP", "AMS 耗材")
+        amsUid: optionalFrom(source, "NOTION_AMS_UID_PROP", "RFID Tag UID"),
+        remainPercent: optionalFrom(source, "NOTION_REMAIN_PERCENT_PROP", "余量%"),
+        remainGrams: optionalFrom(source, "NOTION_REMAIN_GRAMS_PROP", "剩余克数"),
+        amsSlot: optionalFrom(source, "NOTION_AMS_SLOT_PROP"),
+        loaded: optionalFrom(source, "NOTION_LOADED_PROP"),
+        lastSync: optionalFrom(source, "NOTION_LAST_SYNC_PROP", "最后同步时间"),
+        printer: optionalFrom(source, "NOTION_PRINTER_PROP"),
+        material: optionalFrom(source, "NOTION_MATERIAL_PROP", "材料"),
+        color: optionalFrom(source, "NOTION_COLOR_PROP", "颜色"),
+        tagUid: optionalFrom(source, "NOTION_TAG_UID_PROP"),
+        trayUuid: optionalFrom(source, "NOTION_TRAY_UUID_PROP", "Tray UUID"),
+        trayWeight: optionalFrom(source, "NOTION_TRAY_WEIGHT_PROP", "料盘重量g"),
+        title: optionalFrom(source, "NOTION_TITLE_PROP", "AMS 耗材")
       },
-      createMissingPages: bool("CREATE_MISSING_PAGES", true),
-      missingPageTitlePrefix: optional("MISSING_PAGE_TITLE_PREFIX", "待绑定耗材"),
-      clearAbsentLoaded: bool("CLEAR_ABSENT_LOADED", false)
+      createMissingPages: boolFrom(source, "CREATE_MISSING_PAGES", true),
+      missingPageTitlePrefix: optionalFrom(source, "MISSING_PAGE_TITLE_PREFIX", "待绑定耗材"),
+      clearAbsentLoaded: boolFrom(source, "CLEAR_ABSENT_LOADED", false)
     },
-    dryRun: bool("DRY_RUN", true),
-    logLevel: optional("LOG_LEVEL", "info")
+    dryRun: boolFrom(source, "DRY_RUN", true),
+    logLevel: optionalFrom(source, "LOG_LEVEL", "info")
   };
 }

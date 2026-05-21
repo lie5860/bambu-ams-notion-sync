@@ -7,4 +7,8 @@ RUN npm ci --omit=dev
 
 COPY src ./src
 
+RUN mkdir -p /app/data
+
+EXPOSE 3030
+
 CMD ["npm", "start"]
