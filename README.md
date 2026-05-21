@@ -72,6 +72,44 @@ docker run -d \
 
 备份这两个文件就能迁移配置。删除 `./data` 或在页面点击 `重置`，下次打开就是首次配置状态。
 
+## 发布到 Docker Hub
+
+仓库内置 GitHub Actions 会自动构建并推送多架构镜像：
+
+- push 到 `main`：发布 `lie5860/bambu-ams-notion-sync:latest` 和 `:main`
+- push `v0.1.0` 这种 tag：发布 `:v0.1.0`、`:0.1.0`、`:0.1`
+- 也可以在 GitHub Actions 页面手动运行 `Docker Publish`
+
+第一次使用前，需要在 GitHub 仓库里配置两个 Actions secrets：
+
+| Secret | 说明 |
+| --- | --- |
+| `DOCKERHUB_USERNAME` | Docker Hub 用户名，例如 `lie5860` |
+| `DOCKERHUB_TOKEN` | Docker Hub access token，建议不要用账号密码 |
+
+创建版本发布：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+用户拉取和运行：
+
+```bash
+mkdir -p ./data
+docker run -d \
+  --name bambu-ams-notion-sync \
+  --restart unless-stopped \
+  -p 3030:3030 \
+  -e ADMIN_HOST=0.0.0.0 \
+  -e ADMIN_PORT=3030 \
+  -e APP_CONFIG_FILE=/app/data/app-config.json \
+  -e BAMBU_CLOUD_TOKEN_FILE=/app/data/bambu-cloud.json \
+  -v "$(pwd)/data:/app/data" \
+  lie5860/bambu-ams-notion-sync:latest
+```
+
 ## Notion Token 怎么拿
 
 打开 Notion 的 [My integrations](https://www.notion.so/my-integrations)，创建一个 internal integration，然后复制 `Internal Integration Secret` 填到网页里的 `Notion Token`。
