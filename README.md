@@ -20,13 +20,13 @@ http://localhost:3030
 
 网页会显示三步配置向导，已完成的步骤会自动收起，需要修改时再展开：
 
-1. 用 `Bambu Cloud 登录` 登录拓竹账号。国内账号选 `China`，海外账号选 `Global`；手机号和邮箱都可以。
+1. 用 `拓竹云` 登录拓竹账号。国内账号选 `中国区`，海外账号选 `海外区`；手机号和邮箱都可以。
 2. 登录成功后，在设备列表里点 `使用这台打印机`。
-3. 填 Notion Token 和 Notion 页面 ID。
-4. 第一次建议保持 `Dry run = true`，点 `保存并重启同步` 看日志和状态。
-5. 确认没问题后改成 `Dry run = false`，之后会每 10 分钟自动同步一次，也可以点 `立即同步` 手动同步。
+3. 填 Notion 密钥和 Notion 页面 ID。
+4. 第一次建议把 `试运行模式` 设为 `开启：只预览，不写入 Notion`，点保存后查看同步状态。
+5. 确认没问题后改成 `关闭：正式写入 Notion`，之后会每 10 分钟自动同步一次，也可以点 `立即同步` 手动同步。
 
-Docker 会把配置和 Bambu token 保存在本地：
+Docker 会把配置和拓竹云登录凭据保存在本地：
 
 ```text
 ./data/app-config.json
@@ -63,12 +63,12 @@ docker run -d \
 
 | 宿主机文件 | 容器内路径 | 说明 |
 | --- | --- | --- |
-| `./data/app-config.json` | `/app/data/app-config.json` | Web 页面保存的同步配置，例如 Notion 页面 ID、同步周期、dry-run |
-| `./data/bambu-cloud.json` | `/app/data/bambu-cloud.json` | Bambu Cloud 登录 token、uid、broker 和设备列表 |
+| `./data/app-config.json` | `/app/data/app-config.json` | Web 页面保存的同步配置，例如 Notion 页面 ID、同步周期、试运行模式 |
+| `./data/bambu-cloud.json` | `/app/data/bambu-cloud.json` | 拓竹云登录凭据、账号 UID、消息服务器和设备列表 |
 
 备份这两个文件就能迁移配置。删除 `./data` 后，下次打开就是首次配置状态。
 
-第一次启动时，如果还没在 Web 页面登录 Bambu Cloud，日志里看到类似下面的信息是正常的：
+第一次启动时，如果还没在 Web 页面登录拓竹云，日志里看到类似下面的信息是正常的：
 
 ```text
 Sync service waiting for setup: Cannot read Bambu cloud token file "/app/data/bambu-cloud.json". Log in from the Web console first.
@@ -110,13 +110,13 @@ docker run -d \
   lie5860/bambu-ams-notion-sync:latest
 ```
 
-## Notion Token 怎么拿
+## Notion 密钥怎么拿
 
-打开 Notion 的 [My integrations](https://www.notion.so/my-integrations)，创建一个 internal integration，然后复制 `Internal Integration Secret` 填到网页里的 `Notion Token`。
+打开 Notion 的 [My integrations](https://www.notion.so/my-integrations)，创建一个 internal integration，然后复制 `Internal Integration Secret` 填到网页里的 `Notion 密钥`。
 
 然后打开你的 `3D Print` 页面，把这个 integration 添加到页面的 `Connections`。不加这一步的话，Notion API 看不到你的页面和数据库。
 
-网页里的 `Notion 页面/数据库/Data source ID` 可以填：
+网页里的 `Notion 页面/数据库 ID` 可以填：
 
 - 页面链接里的 32 位页面 ID
 - database ID
@@ -177,10 +177,10 @@ docker compose down
 重新登录 Bambu：
 
 ```text
-展开 Bambu Cloud，点击「重置」，二次确认输入 RESET
+展开拓竹云，点击「重置」，二次确认输入「重置」
 ```
 
-这个操作只会清空 Bambu Cloud token 和打印机设置，保留 Notion 配置；不会删除 Notion 里的数据库或页面。
+这个操作只会清空拓竹云登录凭据和打印机设置，保留 Notion 配置；不会删除 Notion 里的数据库或页面。
 
 同步周期默认是 `600000` 毫秒，也就是 10 分钟。可以在网页的 `同步周期` 里修改。
 
@@ -207,9 +207,9 @@ npm run sync:start
 
 ## 本地 MQTT 模式
 
-默认推荐 Cloud 模式，因为打印机不在当前局域网时也能同步。
+默认推荐云端同步，因为打印机不在当前局域网时也能同步。
 
-如果你想完全不走云端，可以在网页里把 `同步方式` 改成 `Local MQTT`，并填：
+如果你想完全不走云端，可以在网页里把 `同步方式` 改成 `局域网同步`，并填：
 
 ```text
 BAMBU_PRINTER_IP

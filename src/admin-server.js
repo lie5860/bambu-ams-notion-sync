@@ -136,7 +136,10 @@ const runtime = new SyncRuntime();
 
 function page() {
   const regions = Object.entries(CLOUD_REGIONS)
-    .map(([value, region]) => `<option value="${value}">${region.label}</option>`)
+    .map(([value, region]) => {
+      const label = value === "china" ? "中国区" : value === "global" ? "海外区" : region.label;
+      return `<option value="${value}">${label}</option>`;
+    })
     .join("");
 
   return `<!doctype html>
@@ -195,14 +198,14 @@ function page() {
   <main>
     <section class="hero">
       <h1>Bambu AMS Notion Sync</h1>
-      <p>按顺序完成 Bambu Cloud、Notion 和同步设置。已完成的步骤会自动收起，需要修改时再展开。</p>
+      <p>按顺序完成拓竹云、Notion 和同步设置。已完成的步骤会自动收起，需要修改时再展开。</p>
     </section>
 
     <section id="bambuPanel" class="panel" data-panel="bambu">
       <button class="panelHeader" type="button" data-open-panel="bambu">
         <span class="stepNo">1</span>
         <span class="stepCopy">
-          <h2>Bambu Cloud</h2>
+          <h2>拓竹云</h2>
           <span id="bambuSummary" class="summary">检查登录状态...</span>
         </span>
         <span id="bambuPill" class="pill warn">待登录</span>
@@ -223,7 +226,7 @@ function page() {
               <input name="password" type="password" autocomplete="current-password" required>
             </label>
           </div>
-          <button type="submit">登录 Bambu Cloud</button>
+          <button type="submit">登录拓竹云</button>
         </form>
 
         <form id="codeForm" hidden>
@@ -234,7 +237,7 @@ function page() {
         </form>
 
         <form id="tfaForm" hidden>
-          <label>MFA Code
+          <label>多因素验证码
             <input name="tfaCode" autocomplete="one-time-code" required>
           </label>
           <button type="submit">提交 MFA</button>
@@ -247,20 +250,20 @@ function page() {
           <div class="grid">
             <label>同步方式
               <select name="BAMBU_CONNECTION_MODE">
-                <option value="cloud">Cloud</option>
-                <option value="local">Local MQTT</option>
+                <option value="cloud">云端同步</option>
+                <option value="local">局域网同步</option>
               </select>
             </label>
-            <label>打印机 Serial
+            <label>打印机序列号
               <input name="BAMBU_PRINTER_SERIAL">
             </label>
             <label>打印机名称
               <input name="BAMBU_PRINTER_NAME">
             </label>
-            <label>Local: 打印机 IP
+            <label>局域网同步：打印机 IP
               <input name="BAMBU_PRINTER_IP">
             </label>
-            <label>Local: LAN Access Code
+            <label>局域网同步：访问码
               <input name="BAMBU_ACCESS_CODE" type="password" autocomplete="off" placeholder="保存后会隐藏">
             </label>
           </div>
@@ -271,9 +274,9 @@ function page() {
         </form>
 
         <div id="resetConfirm" class="confirm">
-          <p>只清空 Bambu Cloud 登录和打印机设置，不会删除 Notion 配置或 Notion 数据。</p>
+          <p>只清空拓竹云登录和打印机设置，不会删除 Notion 配置或 Notion 数据。</p>
           <label>二次确认
-            <input id="resetConfirmText" autocomplete="off" placeholder="输入 RESET">
+            <input id="resetConfirmText" autocomplete="off" placeholder="输入 重置">
           </label>
           <div class="buttons">
             <button id="confirmResetApp" type="button" class="danger">确认重置</button>
@@ -288,7 +291,7 @@ function page() {
         <span class="stepNo">2</span>
         <span class="stepCopy">
           <h2>Notion</h2>
-          <span id="notionSummary" class="summary">等待配置 Notion token 和页面 ID</span>
+          <span id="notionSummary" class="summary">等待配置 Notion 密钥和页面 ID</span>
         </span>
         <span id="notionPill" class="pill warn">待配置</span>
         <span class="chevron">⌄</span>
@@ -296,10 +299,10 @@ function page() {
       <div class="panelBody">
         <form id="notionForm">
           <div class="grid">
-            <label>Notion Token
+            <label>Notion 密钥
               <input name="NOTION_TOKEN" type="password" autocomplete="off" placeholder="保存后会隐藏">
             </label>
-            <label>Notion 页面/数据库/Data source ID
+            <label>Notion 页面/数据库 ID
               <input name="NOTION_DATA_SOURCE_ID" required>
             </label>
             <label>AMS 数据库名称
@@ -328,10 +331,10 @@ function page() {
             <label>同步周期（毫秒，10 分钟 = 600000）
               <input name="PUSHALL_INTERVAL_MS" inputmode="numeric" placeholder="600000">
             </label>
-            <label>Dry run
+            <label>试运行模式
               <select name="DRY_RUN">
-                <option value="true">true</option>
-                <option value="false">false</option>
+                <option value="true">开启：只预览，不写入 Notion</option>
+                <option value="false">关闭：正式写入 Notion</option>
               </select>
             </label>
           </div>
@@ -404,6 +407,12 @@ function page() {
       return Boolean(config.NOTION_TOKEN && config.NOTION_DATA_SOURCE_ID);
     }
 
+    function regionLabel(region) {
+      if (region === "china") return "中国区";
+      if (region === "global") return "海外区";
+      return region || "-";
+    }
+
     function chooseDefaultPanel(data) {
       if (selectedPanel) return;
       if (!data.bambuToken) {
@@ -419,7 +428,7 @@ function page() {
       if (!runtime) return "同步服务未启动";
       const lines = [
         "服务: " + (runtime.running ? "运行中" : "未启动"),
-        "Bambu MQTT: " + (runtime.bambu?.connected ? "已连接" : "未连接"),
+        "拓竹云连接: " + (runtime.bambu?.connected ? "已连接" : "未连接"),
         "最近同步: " + (runtime.lastSyncAt ? new Date(runtime.lastSyncAt).toLocaleString() : "-"),
         "最近耗材数: " + (runtime.lastTrayCount ?? 0)
       ];
@@ -437,7 +446,7 @@ function page() {
     function appendLine(parent, label, value) {
       const span = document.createElement("span");
       span.append(label + ": ");
-      if (label === "Serial") {
+      if (label === "序列号") {
         const code = document.createElement("code");
         code.textContent = value || "";
         span.appendChild(code);
@@ -468,8 +477,8 @@ function page() {
         const title = document.createElement("strong");
         title.textContent = device.name || "Bambu Printer";
         div.appendChild(title);
-        appendLine(div, "Serial", device.dev_id || "");
-        appendLine(div, "Model", device.model || "-");
+        appendLine(div, "序列号", device.dev_id || "");
+        appendLine(div, "型号", device.model || "-");
 
         const button = document.createElement("button");
         button.type = "button";
@@ -497,15 +506,15 @@ function page() {
       const config = data.config || {};
       const ready = Boolean(token);
       document.querySelector("#bambuSummary").textContent = ready
-        ? "已登录 " + (token.region || "-") + " · " + ((token.devices || []).length) + " 台设备"
-        : "等待登录 Bambu Cloud";
+        ? "已登录 " + regionLabel(token.region) + " · " + ((token.devices || []).length) + " 台设备"
+        : "等待登录拓竹云";
       setPill("bambuPill", ready ? "已登录" : "待登录", ready ? "ok" : "warn");
       loginForm.hidden = ready;
       codeForm.hidden = true;
       tfaForm.hidden = true;
       bambuTokenBox.hidden = !ready;
       bambuTokenBox.textContent = ready
-        ? "账号 UID: " + (token.uid || "-") + "\\nMQTT: " + (token.mqttBroker || "-") + "\\nToken 保存时间: " + (token.savedAt || "-")
+        ? "账号 UID: " + (token.uid || "-") + "\\n消息服务器: " + (token.mqttBroker || "-") + "\\n登录凭据保存时间: " + (token.savedAt || "-")
         : "";
       setFormValues(bambuSettingsForm, config);
       renderDevices(token?.devices || []);
@@ -516,7 +525,7 @@ function page() {
       const ready = hasNotionConfig(config);
       document.querySelector("#notionSummary").textContent = ready
         ? "已配置 · " + (config.NOTION_DATA_SOURCE_ID || "").slice(-12)
-        : "等待 Notion token 和页面 ID";
+        : "等待 Notion 密钥和页面 ID";
       setPill("notionPill", ready ? "已配置" : "待配置", ready ? "ok" : "warn");
       setFormValues(notionForm, config);
     }
@@ -527,7 +536,7 @@ function page() {
       setFormValues(syncForm, config);
       setStatus(runtimeText(runtime), statusKind(runtime));
       if (runtime.running) {
-        document.querySelector("#syncSummary").textContent = "运行中 · " + (runtime.bambu?.connected ? "Bambu 已连接" : "等待 MQTT");
+        document.querySelector("#syncSummary").textContent = "运行中 · " + (runtime.bambu?.connected ? "拓竹云已连接" : "等待连接拓竹云");
         setPill("syncPill", "运行中", "ok");
       } else if (runtime.lastError) {
         document.querySelector("#syncSummary").textContent = runtime.lastError;
@@ -588,7 +597,7 @@ function page() {
 
     document.querySelector("#manualSync").addEventListener("click", async () => {
       try {
-        setStatus("已请求立即同步，等待 Bambu report...", "warn");
+        setStatus("已请求立即同步，等待打印机状态回报...", "warn");
         await api("/api/sync", {});
         setTimeout(refresh, 1500);
       } catch (error) {
@@ -611,7 +620,7 @@ function page() {
       resetConfirm.classList.add("active");
       resetConfirmText.value = "";
       resetConfirmText.focus();
-      setStatus("输入 RESET 后再确认重置 Bambu 登录。不会删除 Notion 数据。", "warn");
+      setStatus("输入“重置”后再确认重置拓竹云登录。不会删除 Notion 数据。", "warn");
     });
 
     document.querySelector("#cancelResetApp").addEventListener("click", () => {
@@ -623,7 +632,7 @@ function page() {
     document.querySelector("#confirmResetApp").addEventListener("click", async () => {
       const confirmation = resetConfirmText.value.trim();
       try {
-        setStatus("正在重置 Bambu 登录...", "warn");
+        setStatus("正在重置拓竹云登录...", "warn");
         await api("/api/bambu/reset", { confirmation });
         loginForm.reset();
         codeForm.reset();
@@ -632,7 +641,7 @@ function page() {
         resetConfirmText.value = "";
         selectedPanel = "bambu";
         await refresh();
-        setStatus("已清空 Bambu Cloud 登录和打印机设置，可以重新登录。", "warn");
+        setStatus("已清空拓竹云登录和打印机设置，可以重新登录。", "warn");
       } catch (error) {
         setStatus(error.message, "bad");
       }
@@ -641,7 +650,7 @@ function page() {
     loginForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
-        setStatus("正在登录 Bambu Cloud...", "warn");
+        setStatus("正在登录拓竹云...", "warn");
         const data = await api("/api/bambu/login", formValues(loginForm));
         if (data.needsCode) {
           codeForm.hidden = false;
@@ -768,8 +777,8 @@ async function handleApi(req, res, pathname) {
     }
 
     if (pathname === "/api/bambu/reset" && req.method === "POST") {
-      if (body.confirmation !== "RESET") {
-        sendJson(res, 400, { error: "Type RESET to confirm reset" });
+      if (!["重置", "RESET"].includes(body.confirmation)) {
+        sendJson(res, 400, { error: "请输入“重置”确认操作" });
         return;
       }
 
@@ -779,8 +788,8 @@ async function handleApi(req, res, pathname) {
     }
 
     if (pathname === "/api/reset" && req.method === "POST") {
-      if (body.confirmation !== "RESET") {
-        sendJson(res, 400, { error: "Type RESET to confirm reset" });
+      if (!["重置", "RESET"].includes(body.confirmation)) {
+        sendJson(res, 400, { error: "请输入“重置”确认操作" });
         return;
       }
 
