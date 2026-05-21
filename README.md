@@ -6,7 +6,7 @@
 
 ## 推荐用法：Docker + Web 控制台
 
-启动服务：
+用仓库自带的 `docker-compose.yml` 启动服务：
 
 ```bash
 docker compose up -d --build
@@ -36,6 +36,41 @@ Docker 会把配置和 Bambu token 保存在本地：
 这些文件包含 token，已经在 `.gitignore` 里。
 
 这个 Web 控制台目前没有登录鉴权，建议只在本机、可信局域网或 VPN 内访问，不要直接暴露到公网。
+
+## Docker 镜像和持久化
+
+这个项目的容器启动后只运行 Web 控制台；配置、登录和同步都在页面里完成。镜像本身不包含任何 token，运行时需要把 `/app/data` 映射出来做持久化缓存。
+
+手动构建镜像：
+
+```bash
+docker build -t bambu-ams-notion-sync:latest .
+```
+
+不用 Compose 时也可以直接运行：
+
+```bash
+mkdir -p ./data
+docker run -d \
+  --name bambu-ams-notion-sync \
+  --restart unless-stopped \
+  -p 3030:3030 \
+  -e ADMIN_HOST=0.0.0.0 \
+  -e ADMIN_PORT=3030 \
+  -e APP_CONFIG_FILE=/app/data/app-config.json \
+  -e BAMBU_CLOUD_TOKEN_FILE=/app/data/bambu-cloud.json \
+  -v "$(pwd)/data:/app/data" \
+  bambu-ams-notion-sync:latest
+```
+
+持久化文件说明：
+
+| 宿主机文件 | 容器内路径 | 说明 |
+| --- | --- | --- |
+| `./data/app-config.json` | `/app/data/app-config.json` | Web 页面保存的同步配置，例如 Notion 页面 ID、同步周期、dry-run |
+| `./data/bambu-cloud.json` | `/app/data/bambu-cloud.json` | Bambu Cloud 登录 token、uid、broker 和设备列表 |
+
+备份这两个文件就能迁移配置。删除 `./data` 或在页面点击 `重置`，下次打开就是首次配置状态。
 
 ## Notion Token 怎么拿
 

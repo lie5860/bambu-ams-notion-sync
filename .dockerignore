@@ -1,0 +1,13 @@
+node_modules/
+npm-debug.log*
+
+.git/
+.github/
+.idea/
+.DS_Store
+
+.env
+.app-config.json
+.bambu-cloud.json
+data/
+coverage/
