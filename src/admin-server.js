@@ -148,17 +148,17 @@ function page() {
   <style>
     :root { color-scheme: light; --bg:#f6f7f9; --surface:#fff; --text:#182230; --muted:#667085; --line:#d9e0ea; --accent:#0b6bcb; --bad:#b42318; --ok:#16794f; --warn:#a05a00; }
     * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--text); font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding:28px 16px; }
-    main { width:min(960px,100%); margin:0 auto; display:grid; gap:14px; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding:36px 16px; }
+    main { width:min(960px,100%); margin:0 auto; display:grid; gap:16px; }
     section { background:var(--surface); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 22px rgba(18,29,45,.06); }
     h1 { font-size:24px; margin:0 0 4px; }
     h2 { font-size:17px; margin:0; }
     h3 { font-size:14px; margin:0; }
     p { color:var(--muted); margin:0; line-height:1.55; }
     form { display:grid; gap:12px; }
-    .hero { padding:20px; }
+    .hero { padding:24px; }
     .panel { overflow:hidden; }
-    .panelHeader { width:100%; height:auto; border:0; background:transparent; color:var(--text); display:grid; grid-template-columns:auto 1fr auto auto; gap:12px; align-items:center; padding:18px 20px; text-align:left; cursor:pointer; }
+    .panelHeader { width:100%; height:auto; border:0; background:transparent; color:var(--text); display:grid; grid-template-columns:auto 1fr auto auto; gap:14px; align-items:center; padding:20px 22px; text-align:left; cursor:pointer; }
     .stepNo { width:30px; height:30px; display:grid; place-items:center; border-radius:999px; background:#eef4fb; color:#064f99; font-weight:750; }
     .stepCopy { display:grid; gap:3px; min-width:0; }
     .summary { color:var(--muted); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -168,7 +168,7 @@ function page() {
     .pill.bad { color:var(--bad); border-color:#f3b8b2; background:#fff4f3; }
     .chevron { color:var(--muted); transition:transform .16s ease; }
     .panel.open .chevron { transform:rotate(180deg); }
-    .panelBody { display:none; gap:16px; padding:0 20px 20px; border-top:1px solid var(--line); }
+    .panelBody { display:none; gap:16px; padding:18px 22px 22px; border-top:1px solid var(--line); }
     .panel.open .panelBody { display:grid; }
     .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
     label { display:grid; gap:6px; font-size:13px; color:#344054; }
@@ -388,6 +388,12 @@ function page() {
     }
 
     function openPanel(name, manual = false) {
+      if (manual && panels[name]?.classList.contains("open")) {
+        for (const panel of Object.values(panels)) panel.classList.remove("open");
+        selectedPanel = "__closed__";
+        return;
+      }
+
       for (const [panelName, panel] of Object.entries(panels)) {
         panel.classList.toggle("open", panelName === name);
       }
