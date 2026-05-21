@@ -1,0 +1,21 @@
+{
+  "name": "bambu-ams-notion-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sync Bambu Lab AMS filament RFID/remaining data into an existing Notion table.",
+  "scripts": {
+    "start": "node src/index.js",
+    "cloud:login": "node src/cloud-login-server.js",
+    "debug:bambu": "node src/debug-bambu.js",
+    "check": "node --check src/index.js && node --check src/config.js && node --check src/bambu.js && node --check src/cloud-auth.js && node --check src/cloud-login-server.js && node --check src/debug-bambu.js && node --check src/notion-sync.js && node --check src/notion-properties.js && node --check src/logger.js"
+  },
+  "dependencies": {
+    "@notionhq/client": "^5.22.0",
+    "dotenv": "^16.4.7",
+    "mqtt": "^5.10.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

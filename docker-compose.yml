@@ -1,0 +1,6 @@
+services:
+  bambu-ams-notion-sync:
+    build: .
+    container_name: bambu-ams-notion-sync
+    env_file: .env
+    restart: unless-stopped
