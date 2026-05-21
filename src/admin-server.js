@@ -149,12 +149,27 @@ function page() {
     :root { color-scheme: light; --bg:#f6f7f9; --surface:#fff; --text:#182230; --muted:#667085; --line:#d9e0ea; --accent:#0b6bcb; --bad:#b42318; --ok:#16794f; --warn:#a05a00; }
     * { box-sizing: border-box; }
     body { margin:0; background:var(--bg); color:var(--text); font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding:28px 16px; }
-    main { width:min(960px,100%); margin:0 auto; display:grid; gap:18px; }
-    section { background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:20px; box-shadow:0 8px 22px rgba(18,29,45,.06); }
+    main { width:min(960px,100%); margin:0 auto; display:grid; gap:14px; }
+    section { background:var(--surface); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 22px rgba(18,29,45,.06); }
     h1 { font-size:24px; margin:0 0 4px; }
-    h2 { font-size:17px; margin:0 0 14px; }
+    h2 { font-size:17px; margin:0; }
+    h3 { font-size:14px; margin:0; }
     p { color:var(--muted); margin:0; line-height:1.55; }
     form { display:grid; gap:12px; }
+    .hero { padding:20px; }
+    .panel { overflow:hidden; }
+    .panelHeader { width:100%; height:auto; border:0; background:transparent; color:var(--text); display:grid; grid-template-columns:auto 1fr auto auto; gap:12px; align-items:center; padding:18px 20px; text-align:left; cursor:pointer; }
+    .stepNo { width:30px; height:30px; display:grid; place-items:center; border-radius:999px; background:#eef4fb; color:#064f99; font-weight:750; }
+    .stepCopy { display:grid; gap:3px; min-width:0; }
+    .summary { color:var(--muted); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .pill { border:1px solid var(--line); border-radius:999px; padding:4px 9px; color:var(--muted); background:#fff; font-size:12px; font-weight:700; white-space:nowrap; }
+    .pill.ok { color:var(--ok); border-color:#b8e0cd; background:#f1fbf6; }
+    .pill.warn { color:var(--warn); border-color:#f2d5a3; background:#fff8eb; }
+    .pill.bad { color:var(--bad); border-color:#f3b8b2; background:#fff4f3; }
+    .chevron { color:var(--muted); transition:transform .16s ease; }
+    .panel.open .chevron { transform:rotate(180deg); }
+    .panelBody { display:none; gap:16px; padding:0 20px 20px; border-top:1px solid var(--line); }
+    .panel.open .panelBody { display:grid; }
     .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
     label { display:grid; gap:6px; font-size:13px; color:#344054; }
     input, select { height:40px; border:1px solid var(--line); border-radius:6px; padding:0 11px; font:inherit; color:var(--text); background:#fff; min-width:0; }
@@ -167,148 +182,255 @@ function page() {
     .status.ok { color:var(--ok); background:#f1fbf6; border-color:#b8e0cd; }
     .status.warn { color:var(--warn); background:#fff8eb; border-color:#f2d5a3; }
     .status.bad { color:var(--bad); background:#fff4f3; border-color:#f3b8b2; }
-    .device { border:1px solid var(--line); border-radius:6px; padding:10px 12px; display:grid; gap:4px; font-size:13px; margin-top:10px; }
-    .confirm { display:none; gap:12px; margin-top:12px; border:1px solid #f3b8b2; background:#fff4f3; border-radius:6px; padding:12px; }
+    .device { border:1px solid var(--line); border-radius:6px; padding:10px 12px; display:grid; gap:6px; font-size:13px; margin-top:10px; }
+    .confirm { display:none; gap:12px; border:1px solid #f3b8b2; background:#fff4f3; border-radius:6px; padding:12px; }
     .confirm.active { display:grid; }
+    .subtle { color:var(--muted); font-size:13px; }
     code { font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-    @media (max-width:720px){ .grid{grid-template-columns:1fr;} }
+    [hidden] { display:none !important; }
+    @media (max-width:720px){ .grid{grid-template-columns:1fr;} .panelHeader{grid-template-columns:auto 1fr auto;} .pill{grid-column:2 / 4; justify-self:start;} }
   </style>
 </head>
 <body>
   <main>
-    <section>
+    <section class="hero">
       <h1>Bambu AMS Notion Sync</h1>
-      <p>配置 Bambu Cloud、Notion、同步周期，并支持手动同步。</p>
+      <p>按顺序完成 Bambu Cloud、Notion 和同步设置。已完成的步骤会自动收起，需要修改时再展开。</p>
     </section>
 
-    <section>
-      <h2>状态</h2>
-      <div id="status" class="status">加载中...</div>
-      <div class="buttons" style="margin-top:12px">
-        <button id="manualSync">立即同步</button>
-        <button id="restart" class="secondary">重启同步服务</button>
+    <section id="bambuPanel" class="panel" data-panel="bambu">
+      <button class="panelHeader" type="button" data-open-panel="bambu">
+        <span class="stepNo">1</span>
+        <span class="stepCopy">
+          <h2>Bambu Cloud</h2>
+          <span id="bambuSummary" class="summary">检查登录状态...</span>
+        </span>
+        <span id="bambuPill" class="pill warn">待登录</span>
+        <span class="chevron">⌄</span>
+      </button>
+      <div class="panelBody">
+        <div id="bambuTokenBox" class="status"></div>
+
+        <form id="loginForm">
+          <div class="grid">
+            <label>区域
+              <select name="region">${regions}</select>
+            </label>
+            <label>账号邮箱或手机号
+              <input name="account" autocomplete="username" required>
+            </label>
+            <label>密码
+              <input name="password" type="password" autocomplete="current-password" required>
+            </label>
+          </div>
+          <button type="submit">登录 Bambu Cloud</button>
+        </form>
+
+        <form id="codeForm" hidden>
+          <label>验证码
+            <input name="code" autocomplete="one-time-code" required>
+          </label>
+          <button type="submit">提交验证码</button>
+        </form>
+
+        <form id="tfaForm" hidden>
+          <label>MFA Code
+            <input name="tfaCode" autocomplete="one-time-code" required>
+          </label>
+          <button type="submit">提交 MFA</button>
+        </form>
+
+        <div id="devices"></div>
+
+        <form id="bambuSettingsForm">
+          <h3>打印机设置</h3>
+          <div class="grid">
+            <label>同步方式
+              <select name="BAMBU_CONNECTION_MODE">
+                <option value="cloud">Cloud</option>
+                <option value="local">Local MQTT</option>
+              </select>
+            </label>
+            <label>打印机 Serial
+              <input name="BAMBU_PRINTER_SERIAL">
+            </label>
+            <label>打印机名称
+              <input name="BAMBU_PRINTER_NAME">
+            </label>
+            <label>Local: 打印机 IP
+              <input name="BAMBU_PRINTER_IP">
+            </label>
+            <label>Local: LAN Access Code
+              <input name="BAMBU_ACCESS_CODE" type="password" autocomplete="off" placeholder="保存后会隐藏">
+            </label>
+          </div>
+          <div class="buttons">
+            <button type="submit">保存 Bambu 设置</button>
+            <button id="resetApp" type="button" class="danger">重置</button>
+          </div>
+        </form>
+
+        <div id="resetConfirm" class="confirm">
+          <p>只清空 Bambu Cloud 登录和打印机设置，不会删除 Notion 配置或 Notion 数据。</p>
+          <label>二次确认
+            <input id="resetConfirmText" autocomplete="off" placeholder="输入 RESET">
+          </label>
+          <div class="buttons">
+            <button id="confirmResetApp" type="button" class="danger">确认重置</button>
+            <button id="cancelResetApp" type="button" class="secondary">取消</button>
+          </div>
+        </div>
       </div>
     </section>
 
-    <section>
-      <h2>配置</h2>
-      <form id="configForm">
-        <div class="grid">
-          <label>同步方式
-            <select name="BAMBU_CONNECTION_MODE">
-              <option value="cloud">Cloud</option>
-              <option value="local">Local MQTT</option>
-            </select>
-          </label>
-          <label>同步周期（毫秒，10 分钟 = 600000）
-            <input name="PUSHALL_INTERVAL_MS" inputmode="numeric" placeholder="600000">
-          </label>
-          <label>打印机 Serial
-            <input name="BAMBU_PRINTER_SERIAL" required>
-          </label>
-          <label>打印机名称
-            <input name="BAMBU_PRINTER_NAME">
-          </label>
-          <label>Notion Token
-            <input name="NOTION_TOKEN" type="password" autocomplete="off" placeholder="保存后会隐藏">
-          </label>
-          <label>Notion 页面/数据库/Data source ID
-            <input name="NOTION_DATA_SOURCE_ID" required>
-          </label>
-          <label>Local: 打印机 IP
-            <input name="BAMBU_PRINTER_IP">
-          </label>
-          <label>Local: LAN Access Code
-            <input name="BAMBU_ACCESS_CODE" type="password" autocomplete="off" placeholder="保存后会隐藏">
-          </label>
-          <label>Dry run
-            <select name="DRY_RUN">
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
-          </label>
-          <label>AMS 数据库名称
-            <input name="NOTION_AMS_DATABASE_NAME">
-          </label>
-        </div>
-        <div class="buttons">
-          <button type="submit">保存并重启同步</button>
-        </div>
-      </form>
-    </section>
-
-    <section>
-      <h2>Bambu Cloud 登录</h2>
-      <form id="loginForm">
-        <div class="grid">
-          <label>区域
-            <select name="region">${regions}</select>
-          </label>
-          <label>账号邮箱或手机号
-            <input name="account" autocomplete="username" required>
-          </label>
-          <label>密码
-            <input name="password" type="password" autocomplete="current-password" required>
-          </label>
-        </div>
-        <button type="submit">登录 Bambu Cloud</button>
-      </form>
-      <form id="codeForm" style="display:none; margin-top:12px">
-        <label>验证码
-          <input name="code" autocomplete="one-time-code" required>
-        </label>
-        <button type="submit">提交验证码</button>
-      </form>
-      <form id="tfaForm" style="display:none; margin-top:12px">
-        <label>MFA Code
-          <input name="tfaCode" autocomplete="one-time-code" required>
-        </label>
-        <button type="submit">提交 MFA</button>
-      </form>
-      <div id="devices"></div>
-    </section>
-
-    <section>
-      <h2>重置</h2>
-      <p>清空本服务保存的 Web 配置和 Bambu Cloud 登录，用于模拟首次使用；不会删除 Notion 里的数据库或页面。</p>
-      <div class="buttons" style="margin-top:12px">
-        <button id="resetApp" class="danger">重置</button>
+    <section id="notionPanel" class="panel" data-panel="notion">
+      <button class="panelHeader" type="button" data-open-panel="notion">
+        <span class="stepNo">2</span>
+        <span class="stepCopy">
+          <h2>Notion</h2>
+          <span id="notionSummary" class="summary">等待配置 Notion token 和页面 ID</span>
+        </span>
+        <span id="notionPill" class="pill warn">待配置</span>
+        <span class="chevron">⌄</span>
+      </button>
+      <div class="panelBody">
+        <form id="notionForm">
+          <div class="grid">
+            <label>Notion Token
+              <input name="NOTION_TOKEN" type="password" autocomplete="off" placeholder="保存后会隐藏">
+            </label>
+            <label>Notion 页面/数据库/Data source ID
+              <input name="NOTION_DATA_SOURCE_ID" required>
+            </label>
+            <label>AMS 数据库名称
+              <input name="NOTION_AMS_DATABASE_NAME">
+            </label>
+          </div>
+          <button type="submit">保存 Notion 配置</button>
+        </form>
       </div>
-      <div id="resetConfirm" class="confirm">
-        <label>二次确认
-          <input id="resetConfirmText" autocomplete="off" placeholder="输入 RESET">
-        </label>
-        <div class="buttons">
-          <button id="confirmResetApp" class="danger">确认重置</button>
-          <button id="cancelResetApp" class="secondary">取消</button>
-        </div>
+    </section>
+
+    <section id="syncPanel" class="panel" data-panel="sync">
+      <button class="panelHeader" type="button" data-open-panel="sync">
+        <span class="stepNo">3</span>
+        <span class="stepCopy">
+          <h2>同步</h2>
+          <span id="syncSummary" class="summary">等待前两步完成</span>
+        </span>
+        <span id="syncPill" class="pill warn">未启动</span>
+        <span class="chevron">⌄</span>
+      </button>
+      <div class="panelBody">
+        <div id="status" class="status">加载中...</div>
+        <form id="syncForm">
+          <div class="grid">
+            <label>同步周期（毫秒，10 分钟 = 600000）
+              <input name="PUSHALL_INTERVAL_MS" inputmode="numeric" placeholder="600000">
+            </label>
+            <label>Dry run
+              <select name="DRY_RUN">
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </label>
+          </div>
+          <div class="buttons">
+            <button type="submit">保存同步设置</button>
+            <button id="manualSync" type="button">立即同步</button>
+            <button id="restart" type="button" class="secondary">重启同步服务</button>
+          </div>
+        </form>
       </div>
     </section>
   </main>
 
   <script>
     const statusEl = document.querySelector("#status");
-    const configForm = document.querySelector("#configForm");
+    const bambuSettingsForm = document.querySelector("#bambuSettingsForm");
+    const notionForm = document.querySelector("#notionForm");
+    const syncForm = document.querySelector("#syncForm");
     const loginForm = document.querySelector("#loginForm");
     const codeForm = document.querySelector("#codeForm");
     const tfaForm = document.querySelector("#tfaForm");
     const devicesEl = document.querySelector("#devices");
+    const bambuTokenBox = document.querySelector("#bambuTokenBox");
     const resetConfirm = document.querySelector("#resetConfirm");
     const resetConfirmText = document.querySelector("#resetConfirmText");
+    const panels = {
+      bambu: document.querySelector("#bambuPanel"),
+      notion: document.querySelector("#notionPanel"),
+      sync: document.querySelector("#syncPanel")
+    };
     let pendingTfaKey = "";
+    let selectedPanel = "";
 
     function setStatus(text, kind = "") {
       statusEl.className = "status" + (kind ? " " + kind : "");
       statusEl.textContent = text;
     }
 
-    function values(form) {
+    function formValues(form) {
       return Object.fromEntries(new FormData(form).entries());
+    }
+
+    function setFormValues(form, config) {
+      for (const [key, value] of Object.entries(config || {})) {
+        const input = form.elements[key];
+        if (input) input.value = value;
+      }
+    }
+
+    function setPill(id, text, kind) {
+      const pill = document.querySelector("#" + id);
+      pill.textContent = text;
+      pill.className = "pill " + kind;
+    }
+
+    function openPanel(name, manual = false) {
+      for (const [panelName, panel] of Object.entries(panels)) {
+        panel.classList.toggle("open", panelName === name);
+      }
+      if (manual) selectedPanel = name;
+    }
+
+    function hasNotionConfig(config) {
+      return Boolean(config.NOTION_TOKEN && config.NOTION_DATA_SOURCE_ID);
+    }
+
+    function chooseDefaultPanel(data) {
+      if (selectedPanel) return;
+      if (!data.bambuToken) {
+        openPanel("bambu");
+      } else if (!hasNotionConfig(data.config || {})) {
+        openPanel("notion");
+      } else {
+        openPanel("sync");
+      }
+    }
+
+    function runtimeText(runtime) {
+      if (!runtime) return "同步服务未启动";
+      const lines = [
+        "服务: " + (runtime.running ? "运行中" : "未启动"),
+        "Bambu MQTT: " + (runtime.bambu?.connected ? "已连接" : "未连接"),
+        "最近同步: " + (runtime.lastSyncAt ? new Date(runtime.lastSyncAt).toLocaleString() : "-"),
+        "最近耗材数: " + (runtime.lastTrayCount ?? 0)
+      ];
+      if (runtime.lastError) lines.push("提示: " + runtime.lastError);
+      return lines.join("\\n");
+    }
+
+    function statusKind(runtime) {
+      if (runtime?.running) return "ok";
+      if (!runtime?.lastError) return "warn";
+      if (runtime.lastError.startsWith("Missing required env:") || runtime.lastError.startsWith("Cannot read Bambu cloud token file")) return "warn";
+      return "bad";
     }
 
     function appendLine(parent, label, value) {
       const span = document.createElement("span");
-      if (label) span.append(label + ": ");
+      span.append(label + ": ");
       if (label === "Serial") {
         const code = document.createElement("code");
         code.textContent = value || "";
@@ -332,6 +454,8 @@ function page() {
 
     function renderDevices(devices = []) {
       devicesEl.innerHTML = "";
+      if (devices.length === 0) return;
+
       for (const device of devices) {
         const div = document.createElement("div");
         div.className = "device";
@@ -345,32 +469,111 @@ function page() {
         button.type = "button";
         button.className = "secondary";
         button.textContent = "使用这台打印机";
-        button.addEventListener("click", () => {
-          configForm.elements.BAMBU_PRINTER_SERIAL.value = device.dev_id || "";
-          configForm.elements.BAMBU_PRINTER_NAME.value = device.name || "";
-          setStatus("已填入打印机 Serial，保存配置后会重启同步服务。", "warn");
+        button.addEventListener("click", async () => {
+          try {
+            await api("/api/config", {
+              BAMBU_PRINTER_SERIAL: device.dev_id || "",
+              BAMBU_PRINTER_NAME: device.name || ""
+            });
+            selectedPanel = "";
+            await refresh();
+          } catch (error) {
+            setStatus(error.message, "bad");
+          }
         });
         div.appendChild(button);
         devicesEl.appendChild(div);
       }
     }
 
-    async function refresh() {
-      const data = await api("/api/status");
-      for (const [key, value] of Object.entries(data.config)) {
-        const input = configForm.elements[key];
-        if (input) input.value = value;
-      }
-      renderDevices(data.bambuToken?.devices || []);
-      const runtime = data.runtime;
-      setStatus(JSON.stringify(runtime, null, 2), runtime.running ? "ok" : (runtime.lastError ? "bad" : "warn"));
+    function renderBambu(data) {
+      const token = data.bambuToken;
+      const config = data.config || {};
+      const ready = Boolean(token);
+      document.querySelector("#bambuSummary").textContent = ready
+        ? "已登录 " + (token.region || "-") + " · " + ((token.devices || []).length) + " 台设备"
+        : "等待登录 Bambu Cloud";
+      setPill("bambuPill", ready ? "已登录" : "待登录", ready ? "ok" : "warn");
+      loginForm.hidden = ready;
+      codeForm.hidden = true;
+      tfaForm.hidden = true;
+      bambuTokenBox.hidden = !ready;
+      bambuTokenBox.textContent = ready
+        ? "账号 UID: " + (token.uid || "-") + "\\nMQTT: " + (token.mqttBroker || "-") + "\\nToken 保存时间: " + (token.savedAt || "-")
+        : "";
+      setFormValues(bambuSettingsForm, config);
+      renderDevices(token?.devices || []);
     }
 
-    configForm.addEventListener("submit", async (event) => {
+    function renderNotion(data) {
+      const config = data.config || {};
+      const ready = hasNotionConfig(config);
+      document.querySelector("#notionSummary").textContent = ready
+        ? "已配置 · " + (config.NOTION_DATA_SOURCE_ID || "").slice(-12)
+        : "等待 Notion token 和页面 ID";
+      setPill("notionPill", ready ? "已配置" : "待配置", ready ? "ok" : "warn");
+      setFormValues(notionForm, config);
+    }
+
+    function renderSync(data) {
+      const runtime = data.runtime || {};
+      const config = data.config || {};
+      setFormValues(syncForm, config);
+      setStatus(runtimeText(runtime), statusKind(runtime));
+      if (runtime.running) {
+        document.querySelector("#syncSummary").textContent = "运行中 · " + (runtime.bambu?.connected ? "Bambu 已连接" : "等待 MQTT");
+        setPill("syncPill", "运行中", "ok");
+      } else if (runtime.lastError) {
+        document.querySelector("#syncSummary").textContent = runtime.lastError;
+        setPill("syncPill", "待处理", statusKind(runtime));
+      } else {
+        document.querySelector("#syncSummary").textContent = "等待前两步完成";
+        setPill("syncPill", "未启动", "warn");
+      }
+    }
+
+    async function refresh() {
+      const data = await api("/api/status");
+      renderBambu(data);
+      renderNotion(data);
+      renderSync(data);
+      chooseDefaultPanel(data);
+    }
+
+    for (const button of document.querySelectorAll("[data-open-panel]")) {
+      button.addEventListener("click", () => openPanel(button.dataset.openPanel, true));
+    }
+
+    bambuSettingsForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
-        setStatus("保存中...", "warn");
-        await api("/api/config", values(configForm));
+        setStatus("保存 Bambu 设置中...", "warn");
+        await api("/api/config", formValues(bambuSettingsForm));
+        selectedPanel = "";
+        await refresh();
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    });
+
+    notionForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        setStatus("保存 Notion 配置中...", "warn");
+        await api("/api/config", formValues(notionForm));
+        selectedPanel = "";
+        await refresh();
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    });
+
+    syncForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        setStatus("保存同步设置中...", "warn");
+        await api("/api/config", formValues(syncForm));
+        selectedPanel = "sync";
         await refresh();
       } catch (error) {
         setStatus(error.message, "bad");
@@ -391,17 +594,18 @@ function page() {
       try {
         setStatus("正在重启同步服务...", "warn");
         await api("/api/restart", {});
+        selectedPanel = "sync";
         await refresh();
       } catch (error) {
         setStatus(error.message, "bad");
       }
     });
 
-    document.querySelector("#resetApp").addEventListener("click", async () => {
+    document.querySelector("#resetApp").addEventListener("click", () => {
       resetConfirm.classList.add("active");
       resetConfirmText.value = "";
       resetConfirmText.focus();
-      setStatus("输入 RESET 后再确认重置。不会删除 Notion 数据。", "warn");
+      setStatus("输入 RESET 后再确认重置 Bambu 登录。不会删除 Notion 数据。", "warn");
     });
 
     document.querySelector("#cancelResetApp").addEventListener("click", () => {
@@ -413,17 +617,16 @@ function page() {
     document.querySelector("#confirmResetApp").addEventListener("click", async () => {
       const confirmation = resetConfirmText.value.trim();
       try {
-        setStatus("正在重置...", "warn");
-        await api("/api/reset", { confirmation });
+        setStatus("正在重置 Bambu 登录...", "warn");
+        await api("/api/bambu/reset", { confirmation });
         loginForm.reset();
         codeForm.reset();
         tfaForm.reset();
-        codeForm.style.display = "none";
-        tfaForm.style.display = "none";
         resetConfirm.classList.remove("active");
         resetConfirmText.value = "";
+        selectedPanel = "bambu";
         await refresh();
-        setStatus("已清空本机配置和 Bambu Cloud token，可以按新用户流程重新开始。", "warn");
+        setStatus("已清空 Bambu Cloud 登录和打印机设置，可以重新登录。", "warn");
       } catch (error) {
         setStatus(error.message, "bad");
       }
@@ -433,15 +636,16 @@ function page() {
       event.preventDefault();
       try {
         setStatus("正在登录 Bambu Cloud...", "warn");
-        const data = await api("/api/bambu/login", values(loginForm));
+        const data = await api("/api/bambu/login", formValues(loginForm));
         if (data.needsCode) {
-          codeForm.style.display = "grid";
+          codeForm.hidden = false;
           setStatus(data.codeTarget === "sms" ? "已发送短信验证码。" : "已发送邮箱验证码。", "warn");
         } else if (data.needsTfa) {
           pendingTfaKey = data.tfaKey || "";
-          tfaForm.style.display = "grid";
+          tfaForm.hidden = false;
           setStatus("需要 MFA。", "warn");
         } else {
+          selectedPanel = "";
           await refresh();
         }
       } catch (error) {
@@ -452,9 +656,10 @@ function page() {
     codeForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
-        const login = values(loginForm);
-        await api("/api/bambu/verify", { region: login.region, account: login.account, code: values(codeForm).code });
-        codeForm.style.display = "none";
+        const login = formValues(loginForm);
+        await api("/api/bambu/verify", { region: login.region, account: login.account, code: formValues(codeForm).code });
+        codeForm.hidden = true;
+        selectedPanel = "";
         await refresh();
       } catch (error) {
         setStatus(error.message, "bad");
@@ -464,9 +669,10 @@ function page() {
     tfaForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
-        const login = values(loginForm);
-        await api("/api/bambu/tfa", { region: login.region, tfaKey: pendingTfaKey, tfaCode: values(tfaForm).tfaCode });
-        tfaForm.style.display = "none";
+        const login = formValues(loginForm);
+        await api("/api/bambu/tfa", { region: login.region, tfaKey: pendingTfaKey, tfaCode: formValues(tfaForm).tfaCode });
+        tfaForm.hidden = true;
+        selectedPanel = "";
         await refresh();
       } catch (error) {
         setStatus(error.message, "bad");
@@ -504,6 +710,21 @@ async function saveBambuToken(body) {
   await runtime.restart();
 }
 
+async function resetBambuLogin() {
+  const existing = await loadStoredConfig();
+  const tokenFile = resolve(existing.BAMBU_CLOUD_TOKEN_FILE || ".bambu-cloud.json");
+  await runtime.reset();
+  await removeIfExists(tokenFile);
+  await saveStoredConfig({
+    ...existing,
+    BAMBU_CONNECTION_MODE: "cloud",
+    BAMBU_PRINTER_SERIAL: "",
+    BAMBU_PRINTER_NAME: "",
+    BAMBU_PRINTER_IP: "",
+    BAMBU_ACCESS_CODE: ""
+  });
+}
+
 async function handleApi(req, res, pathname) {
   try {
     if (pathname === "/api/status" && req.method === "GET") {
@@ -537,6 +758,17 @@ async function handleApi(req, res, pathname) {
 
     if (pathname === "/api/sync" && req.method === "POST") {
       sendJson(res, 200, runtime.manualSync());
+      return;
+    }
+
+    if (pathname === "/api/bambu/reset" && req.method === "POST") {
+      if (body.confirmation !== "RESET") {
+        sendJson(res, 400, { error: "Type RESET to confirm reset" });
+        return;
+      }
+
+      await resetBambuLogin();
+      sendJson(res, 200, { ok: true, runtime: runtime.status() });
       return;
     }
 

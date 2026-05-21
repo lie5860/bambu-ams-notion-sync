@@ -18,7 +18,7 @@ docker compose up -d --build
 http://localhost:3030
 ```
 
-在网页里完成这几件事：
+网页会显示三步配置向导，已完成的步骤会自动收起，需要修改时再展开：
 
 1. 用 `Bambu Cloud 登录` 登录拓竹账号。国内账号选 `China`，海外账号选 `Global`；手机号和邮箱都可以。
 2. 登录成功后，在设备列表里点 `使用这台打印机`。
@@ -66,7 +66,7 @@ docker run -d \
 | `./data/app-config.json` | `/app/data/app-config.json` | Web 页面保存的同步配置，例如 Notion 页面 ID、同步周期、dry-run |
 | `./data/bambu-cloud.json` | `/app/data/bambu-cloud.json` | Bambu Cloud 登录 token、uid、broker 和设备列表 |
 
-备份这两个文件就能迁移配置。删除 `./data` 或在页面点击 `重置`，下次打开就是首次配置状态。
+备份这两个文件就能迁移配置。删除 `./data` 后，下次打开就是首次配置状态。
 
 第一次启动时，如果还没在 Web 页面登录 Bambu Cloud，日志里看到类似下面的信息是正常的：
 
@@ -174,13 +174,13 @@ docker compose down
 打开 http://localhost:3030，点击「立即同步」
 ```
 
-模拟新用户：
+重新登录 Bambu：
 
 ```text
-打开 http://localhost:3030，点击「重置」，二次确认输入 RESET
+展开 Bambu Cloud，点击「重置」，二次确认输入 RESET
 ```
 
-这个操作会清空 Web 控制台保存的配置和 Bambu Cloud token，并停止同步服务；不会删除 Notion 里的数据库或页面。
+这个操作只会清空 Bambu Cloud token 和打印机设置，保留 Notion 配置；不会删除 Notion 里的数据库或页面。
 
 同步周期默认是 `600000` 毫秒，也就是 10 分钟。可以在网页的 `同步周期` 里修改。
 
