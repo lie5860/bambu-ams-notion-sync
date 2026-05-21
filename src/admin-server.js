@@ -366,6 +366,7 @@ function page() {
       sync: document.querySelector("#syncPanel")
     };
     let pendingTfaKey = "";
+    let pendingLoginStep = "";
     let selectedPanel = "";
 
     function setStatus(text, kind = "") {
@@ -505,13 +506,17 @@ function page() {
       const token = data.bambuToken;
       const config = data.config || {};
       const ready = Boolean(token);
+      if (ready) {
+        pendingLoginStep = "";
+        pendingTfaKey = "";
+      }
       document.querySelector("#bambuSummary").textContent = ready
         ? "已登录 " + regionLabel(token.region) + " · " + ((token.devices || []).length) + " 台设备"
         : "等待登录拓竹云";
       setPill("bambuPill", ready ? "已登录" : "待登录", ready ? "ok" : "warn");
       loginForm.hidden = ready;
-      codeForm.hidden = true;
-      tfaForm.hidden = true;
+      codeForm.hidden = ready || pendingLoginStep !== "code";
+      tfaForm.hidden = ready || pendingLoginStep !== "tfa";
       bambuTokenBox.hidden = !ready;
       bambuTokenBox.textContent = ready
         ? "账号 UID: " + (token.uid || "-") + "\\n消息服务器: " + (token.mqttBroker || "-") + "\\n登录凭据保存时间: " + (token.savedAt || "-")
@@ -637,6 +642,8 @@ function page() {
         loginForm.reset();
         codeForm.reset();
         tfaForm.reset();
+        pendingLoginStep = "";
+        pendingTfaKey = "";
         resetConfirm.classList.remove("active");
         resetConfirmText.value = "";
         selectedPanel = "bambu";
@@ -653,13 +660,19 @@ function page() {
         setStatus("正在登录拓竹云...", "warn");
         const data = await api("/api/bambu/login", formValues(loginForm));
         if (data.needsCode) {
+          pendingLoginStep = "code";
+          selectedPanel = "bambu";
           codeForm.hidden = false;
           setStatus(data.codeTarget === "sms" ? "已发送短信验证码。" : "已发送邮箱验证码。", "warn");
         } else if (data.needsTfa) {
+          pendingLoginStep = "tfa";
           pendingTfaKey = data.tfaKey || "";
+          selectedPanel = "bambu";
           tfaForm.hidden = false;
-          setStatus("需要 MFA。", "warn");
+          setStatus("需要多因素验证码。", "warn");
         } else {
+          pendingLoginStep = "";
+          pendingTfaKey = "";
           selectedPanel = "";
           await refresh();
         }
@@ -673,6 +686,7 @@ function page() {
       try {
         const login = formValues(loginForm);
         await api("/api/bambu/verify", { region: login.region, account: login.account, code: formValues(codeForm).code });
+        pendingLoginStep = "";
         codeForm.hidden = true;
         selectedPanel = "";
         await refresh();
@@ -686,6 +700,8 @@ function page() {
       try {
         const login = formValues(loginForm);
         await api("/api/bambu/tfa", { region: login.region, tfaKey: pendingTfaKey, tfaCode: formValues(tfaForm).tfaCode });
+        pendingLoginStep = "";
+        pendingTfaKey = "";
         tfaForm.hidden = true;
         selectedPanel = "";
         await refresh();
