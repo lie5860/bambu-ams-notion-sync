@@ -19,6 +19,13 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+function isSetupError(error) {
+  return (
+    error.message?.startsWith("Missing required env:") ||
+    error.message?.startsWith("Cannot read Bambu cloud token file")
+  );
+}
+
 function parseBody(req) {
   return new Promise((resolveBody, reject) => {
     let raw = "";
@@ -85,7 +92,11 @@ class SyncRuntime {
     } catch (error) {
       this.running = false;
       this.lastError = error.message;
-      this.logger.error("Sync service not started:", error.message);
+      if (isSetupError(error)) {
+        this.logger.warn("Sync service waiting for setup:", error.message);
+      } else {
+        this.logger.error("Sync service not started:", error.message);
+      }
     }
   }
 

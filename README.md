@@ -55,10 +55,6 @@ docker run -d \
   --name bambu-ams-notion-sync \
   --restart unless-stopped \
   -p 3030:3030 \
-  -e ADMIN_HOST=0.0.0.0 \
-  -e ADMIN_PORT=3030 \
-  -e APP_CONFIG_FILE=/app/data/app-config.json \
-  -e BAMBU_CLOUD_TOKEN_FILE=/app/data/bambu-cloud.json \
   -v "$(pwd)/data:/app/data" \
   bambu-ams-notion-sync:latest
 ```
@@ -71,6 +67,14 @@ docker run -d \
 | `./data/bambu-cloud.json` | `/app/data/bambu-cloud.json` | Bambu Cloud 登录 token、uid、broker 和设备列表 |
 
 备份这两个文件就能迁移配置。删除 `./data` 或在页面点击 `重置`，下次打开就是首次配置状态。
+
+第一次启动时，如果还没在 Web 页面登录 Bambu Cloud，日志里看到类似下面的信息是正常的：
+
+```text
+Sync service waiting for setup: Cannot read Bambu cloud token file "/app/data/bambu-cloud.json". Log in from the Web console first.
+```
+
+这表示后台同步还没开始，不是镜像启动失败。打开 `http://localhost:3030` 完成登录和 Notion 配置后，服务会自动重启同步。
 
 ## 发布到 Docker Hub
 
@@ -102,10 +106,6 @@ docker run -d \
   --name bambu-ams-notion-sync \
   --restart unless-stopped \
   -p 3030:3030 \
-  -e ADMIN_HOST=0.0.0.0 \
-  -e ADMIN_PORT=3030 \
-  -e APP_CONFIG_FILE=/app/data/app-config.json \
-  -e BAMBU_CLOUD_TOKEN_FILE=/app/data/bambu-cloud.json \
   -v "$(pwd)/data:/app/data" \
   lie5860/bambu-ams-notion-sync:latest
 ```
