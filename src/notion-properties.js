@@ -2,6 +2,10 @@ function textContent(value) {
   return [{ type: "text", text: { content: value == null ? "" : String(value).slice(0, 2000) } }];
 }
 
+function propertyIdentifier(propertyName, propertySchema) {
+  return propertySchema?.id || propertyName;
+}
+
 export function getPlainText(propertyValue) {
   if (!propertyValue) return "";
 
@@ -28,27 +32,29 @@ export function getPlainText(propertyValue) {
 }
 
 export function filterForExactValue(propertyName, propertySchema, value) {
+  const property = propertyIdentifier(propertyName, propertySchema);
+
   switch (propertySchema.type) {
     case "title":
-      return { property: propertyName, title: { equals: value } };
+      return { property, title: { equals: value } };
     case "rich_text":
-      return { property: propertyName, rich_text: { equals: value } };
+      return { property, rich_text: { equals: value } };
     case "select":
-      return { property: propertyName, select: { equals: value } };
+      return { property, select: { equals: value } };
     case "status":
-      return { property: propertyName, status: { equals: value } };
+      return { property, status: { equals: value } };
     case "url":
-      return { property: propertyName, url: { equals: value } };
+      return { property, url: { equals: value } };
     case "email":
-      return { property: propertyName, email: { equals: value } };
+      return { property, email: { equals: value } };
     case "phone_number":
-      return { property: propertyName, phone_number: { equals: value } };
+      return { property, phone_number: { equals: value } };
     case "number": {
       const number = Number(value);
       if (!Number.isFinite(number)) {
         throw new Error(`Cannot query non-numeric value "${value}" against number property "${propertyName}"`);
       }
-      return { property: propertyName, number: { equals: number } };
+      return { property, number: { equals: number } };
     }
     default:
       throw new Error(
@@ -57,38 +63,40 @@ export function filterForExactValue(propertyName, propertySchema, value) {
   }
 }
 
-export function checkboxFilter(propertyName, expected) {
-  return { property: propertyName, checkbox: { equals: expected } };
+export function checkboxFilter(propertyName, expected, propertySchema = null) {
+  return { property: propertyIdentifier(propertyName, propertySchema), checkbox: { equals: expected } };
 }
 
 export function propertyPayload(propertyName, propertySchema, value) {
   if (value === undefined) return null;
 
+  const property = propertyIdentifier(propertyName, propertySchema);
+
   switch (propertySchema.type) {
     case "title":
-      return [propertyName, { title: textContent(value) }];
+      return [property, { title: textContent(value) }];
     case "rich_text":
-      return [propertyName, { rich_text: textContent(value) }];
+      return [property, { rich_text: textContent(value) }];
     case "number":
-      return [propertyName, { number: value == null || value === "" ? null : Number(value) }];
+      return [property, { number: value == null || value === "" ? null : Number(value) }];
     case "checkbox":
-      return [propertyName, { checkbox: Boolean(value) }];
+      return [property, { checkbox: Boolean(value) }];
     case "date":
-      return [propertyName, { date: value ? { start: value instanceof Date ? value.toISOString() : String(value) } : null }];
+      return [property, { date: value ? { start: value instanceof Date ? value.toISOString() : String(value) } : null }];
     case "select":
-      return [propertyName, value ? { select: { name: String(value) } } : { select: null }];
+      return [property, value ? { select: { name: String(value) } } : { select: null }];
     case "status":
-      return [propertyName, value ? { status: { name: String(value) } } : { status: null }];
+      return [property, value ? { status: { name: String(value) } } : { status: null }];
     case "multi_select": {
       const values = Array.isArray(value) ? value : value ? [value] : [];
-      return [propertyName, { multi_select: values.map((item) => ({ name: String(item) })) }];
+      return [property, { multi_select: values.map((item) => ({ name: String(item) })) }];
     }
     case "url":
-      return [propertyName, { url: value ? String(value) : null }];
+      return [property, { url: value ? String(value) : null }];
     case "email":
-      return [propertyName, { email: value ? String(value) : null }];
+      return [property, { email: value ? String(value) : null }];
     case "phone_number":
-      return [propertyName, { phone_number: value ? String(value) : null }];
+      return [property, { phone_number: value ? String(value) : null }];
     default:
       return null;
   }

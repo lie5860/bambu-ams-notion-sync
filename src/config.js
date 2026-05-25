@@ -123,7 +123,7 @@ export function loadConfig(source = process.env) {
         lastSync: optionalFrom(source, "NOTION_LAST_SYNC_PROP", "最后同步时间"),
         printer: optionalFrom(source, "NOTION_PRINTER_PROP"),
         material: optionalFrom(source, "NOTION_MATERIAL_PROP", "材料"),
-        color: optionalFrom(source, "NOTION_COLOR_PROP", "颜色"),
+        color: optionalFrom(source, "NOTION_COLOR_PROP"),
         tagUid: optionalFrom(source, "NOTION_TAG_UID_PROP"),
         trayUuid: optionalFrom(source, "NOTION_TRAY_UUID_PROP", "Tray UUID"),
         trayWeight: optionalFrom(source, "NOTION_TRAY_WEIGHT_PROP", "料盘重量g"),

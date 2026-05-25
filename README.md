@@ -1,6 +1,6 @@
 # bambu-ams-notion-sync
 
-把 Bambu Lab AMS 读到的耗材 RFID、余量、材料和颜色同步到 Notion。
+把 Bambu Lab AMS 读到的耗材 RFID、余量和材料同步到 Notion，并用页面 icon 显示耗材颜色。
 
 项目会维护一个独立的 Notion 子数据库 `AMS 耗材`。你原来的 `耗材管理` 表继续作为人工主表；在 Notion 里给它加 Relation 关联 `AMS 耗材` 后，就可以按 RFID 绑定真实耗材。
 
@@ -135,7 +135,6 @@ docker run -d \
 | `余量%` | Number | AMS 上报的剩余百分比 |
 | `剩余克数` | Number | 按余量和料盘重量估算 |
 | `材料` | Rich text | 例如 `PLA Basic` |
-| `颜色` | Rich text | 十六进制颜色 |
 | `料盘重量g` | Number | AMS 上报的 `tray_weight`，默认 1000g |
 | `Tray UUID` | Rich text | Bambu 上报的另一个耗材/料盘识别值 |
 | `最后同步时间` | Date | 最近一次同步时间 |
@@ -147,6 +146,8 @@ https://dummyimage.com/64x64/C12E1F/C12E1F.png
 ```
 
 Notion 的 Relation 选择器通常会显示页面 icon，所以选择关联耗材时能直接看到颜色；标题只保留材料和 RFID 短码，避免重复信息太多。
+
+如果还想额外保存十六进制色号文本，可以手动创建字段，然后设置 `NOTION_COLOR_PROP` 指向它。
 
 ## Tray UUID 是什么
 

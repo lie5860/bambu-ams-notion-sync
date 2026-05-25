@@ -305,9 +305,10 @@ export class NotionAmsSync {
 
     const title = this.displayTitle(tray);
     const titleValue = titleProp.name === this.config.properties.amsUid ? tray.uid : title;
+    const titleKey = titleProp.schema.id || titleProp.name;
     const createProperties = {
       ...properties,
-      [titleProp.name]: { title: [{ type: "text", text: { content: titleValue } }] }
+      [titleKey]: { title: [{ type: "text", text: { content: titleValue } }] }
     };
 
     if (this.config.dryRun) {
@@ -333,7 +334,7 @@ export class NotionAmsSync {
       return;
     }
 
-    const pages = await this.queryAll(checkboxFilter(props.loaded, true));
+    const pages = await this.queryAll(checkboxFilter(props.loaded, true, loadedSchema));
 
     for (const page of pages) {
       const uid = getPlainText(page.properties?.[props.amsUid]);
