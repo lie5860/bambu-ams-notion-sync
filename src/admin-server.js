@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import { BambuMqttClient } from "./bambu.js";
+import { fetchCloudPrintTasks } from "./bambu-cloud-tasks.js";
 import { CLOUD_REGIONS, loadCloudToken, loginWithCode, loginWithPassword, loginWithTfa, saveCloudToken } from "./cloud-auth.js";
 import { loadConfig } from "./config.js";
 import { loadStoredConfig, maskConfig, mergeConfig, resetStoredConfig, saveStoredConfig } from "./config-store.js";
@@ -63,6 +64,8 @@ class SyncRuntime {
     this.lastError = "";
     this.lastSyncAt = "";
     this.lastTrayCount = 0;
+    this.lastTaskHistorySyncAt = "";
+    this.lastTaskHistoryCount = 0;
   }
 
   async restart() {
@@ -74,21 +77,30 @@ class SyncRuntime {
       const notionConfig = {
         ...config.notion,
         dryRun: config.dryRun,
-        printerName: config.bambu.printerName
+        printerName: config.bambu.printerName,
+        printerSerial: config.bambu.printerSerial
       };
 
       this.logger = createLogger(config.logLevel);
       this.notionSync = new NotionAmsSync(notionConfig, this.logger);
       await this.notionSync.init();
 
-      this.bambuClient = new BambuMqttClient(config.bambu, this.logger, async (trays) => {
-        this.lastSyncAt = new Date().toISOString();
-        this.lastTrayCount = trays.length;
-        await this.notionSync.syncTrays(trays);
-      });
+      this.bambuClient = new BambuMqttClient(
+        config.bambu,
+        this.logger,
+        async (trays) => {
+          this.lastSyncAt = new Date().toISOString();
+          this.lastTrayCount = trays.length;
+          await this.notionSync.syncTrays(trays);
+        },
+        (printState) => this.notionSync.syncPrinterStatus(printState)
+      );
       this.bambuClient.start();
       this.running = true;
       this.lastError = "";
+      this.syncPrintTaskHistory(config).catch((error) => {
+        this.logger.error("Print task history sync failed:", error.stack || error.message);
+      });
     } catch (error) {
       this.running = false;
       this.lastError = error.message;
@@ -112,6 +124,8 @@ class SyncRuntime {
     this.lastError = "";
     this.lastSyncAt = "";
     this.lastTrayCount = 0;
+    this.lastTaskHistorySyncAt = "";
+    this.lastTaskHistoryCount = 0;
   }
 
   manualSync() {
@@ -127,8 +141,25 @@ class SyncRuntime {
       lastError: this.lastError,
       lastSyncAt: this.lastSyncAt,
       lastTrayCount: this.lastTrayCount,
+      lastTaskHistorySyncAt: this.lastTaskHistorySyncAt,
+      lastTaskHistoryCount: this.lastTaskHistoryCount,
       bambu: this.bambuClient?.status() || null
     };
+  }
+
+  async syncPrintTaskHistory(config) {
+    if (!config.notion.printTaskHistorySyncOnStart || !config.bambu.cloud?.accessToken || !this.notionSync) return;
+
+    const tasks = await fetchCloudPrintTasks({
+      cloud: config.bambu.cloud,
+      printerSerial: config.bambu.printerSerial,
+      limit: config.notion.printTaskHistoryLimit,
+      pageSize: config.notion.printTaskHistoryPageSize,
+      logger: this.logger
+    });
+    await this.notionSync.syncCloudPrintTasks(tasks);
+    this.lastTaskHistorySyncAt = new Date().toISOString();
+    this.lastTaskHistoryCount = tasks.length;
   }
 }
 
@@ -431,7 +462,8 @@ function page() {
         "服务: " + (runtime.running ? "运行中" : "未启动"),
         "拓竹云连接: " + (runtime.bambu?.connected ? "已连接" : "未连接"),
         "最近同步: " + (runtime.lastSyncAt ? new Date(runtime.lastSyncAt).toLocaleString() : "-"),
-        "最近耗材数: " + (runtime.lastTrayCount ?? 0)
+        "最近耗材数: " + (runtime.lastTrayCount ?? 0),
+        "任务历史: " + (runtime.lastTaskHistorySyncAt ? (runtime.lastTaskHistoryCount ?? 0) + " 条 · " + new Date(runtime.lastTaskHistorySyncAt).toLocaleString() : "同步中/未同步")
       ];
       if (runtime.lastError) lines.push("提示: " + runtime.lastError);
       return lines.join("\\n");

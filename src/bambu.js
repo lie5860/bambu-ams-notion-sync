@@ -9,6 +9,24 @@ function toNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function isPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value);
+}
+
+function mergePlainObjects(target, source) {
+  if (!isPlainObject(source)) return target;
+
+  for (const [key, value] of Object.entries(source)) {
+    if (isPlainObject(value) && isPlainObject(target[key])) {
+      target[key] = mergePlainObjects({ ...target[key] }, value);
+    } else {
+      target[key] = value;
+    }
+  }
+
+  return target;
+}
+
 function normalizeHexColor(value) {
   if (!value || typeof value !== "string") return "";
   return value.startsWith("#") ? value : `#${value.slice(0, 6)}`;
@@ -86,14 +104,16 @@ export function extractAmsTrays(message, config) {
 }
 
 export class BambuMqttClient {
-  constructor(config, logger, onTrays) {
+  constructor(config, logger, onTrays, onPrinterStatus = null) {
     this.config = config;
     this.logger = logger;
     this.onTrays = onTrays;
+    this.onPrinterStatus = onPrinterStatus;
     this.client = null;
     this.pushAllTimer = null;
     this.debounceTimer = null;
     this.lastTrays = [];
+    this.lastPrintState = {};
     this.sequence = 0;
     this.connected = false;
   }
@@ -189,7 +209,16 @@ export class BambuMqttClient {
       return;
     }
 
-    const trays = extractAmsTrays(message, this.config);
+    if (message.print) {
+      this.lastPrintState = mergePlainObjects({ ...this.lastPrintState }, message.print);
+      if (this.onPrinterStatus) {
+        this.onPrinterStatus(this.lastPrintState).catch((error) => {
+          this.logger.error("Print task sync failed:", error.stack || error.message);
+        });
+      }
+    }
+
+    const trays = extractAmsTrays({ print: this.lastPrintState }, this.config);
     if (trays.length === 0) return;
 
     this.lastTrays = trays;
