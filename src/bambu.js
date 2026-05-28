@@ -56,6 +56,29 @@ function pickUid(slot, uidFields) {
   return "";
 }
 
+function hasAmsTrayPayload(message) {
+  return Array.isArray(message?.print?.ams?.ams);
+}
+
+function traySnapshotSignature(trays) {
+  return JSON.stringify(
+    trays
+      .map((tray) => ({
+        uid: tray.uid,
+        tagUid: tray.tagUid,
+        trayUuid: tray.trayUuid,
+        slotLabel: tray.slotLabel,
+        material: tray.material,
+        trayType: tray.trayType,
+        color: tray.color,
+        remainPercent: tray.remainPercent,
+        remainGrams: tray.remainGrams,
+        trayWeight: tray.trayWeight
+      }))
+      .sort((a, b) => `${a.uid}:${a.slotLabel}`.localeCompare(`${b.uid}:${b.slotLabel}`))
+  );
+}
+
 export function extractAmsTrays(message, config) {
   const amsList = message?.print?.ams?.ams;
   if (!Array.isArray(amsList)) return [];
@@ -114,6 +137,9 @@ export class BambuMqttClient {
     this.pushAllTimer = null;
     this.debounceTimer = null;
     this.lastTrays = [];
+    this.lastTraySnapshotSignature = "";
+    this.pendingTraySnapshotSignature = "";
+    this.forceNextTrayFlush = false;
     this.lastPrintState = {};
     this.sequence = 0;
     this.connected = false;
@@ -203,7 +229,10 @@ export class BambuMqttClient {
   }
 
   requestManualSync() {
-    return this.requestPushAll("manual");
+    this.forceNextTrayFlush = true;
+    const requested = this.requestPushAll("manual");
+    if (!requested) this.forceNextTrayFlush = false;
+    return requested;
   }
 
   handleMessage(payload) {
@@ -224,19 +253,40 @@ export class BambuMqttClient {
       }
     }
 
+    if (!hasAmsTrayPayload(message)) return;
+
     const trays = extractAmsTrays({ print: this.lastPrintState }, this.config);
     if (trays.length === 0) return;
 
+    const signature = traySnapshotSignature(trays);
+    if (
+      !this.forceNextTrayFlush &&
+      (signature === this.lastTraySnapshotSignature || signature === this.pendingTraySnapshotSignature)
+    ) {
+      this.logger.debug("Skipping unchanged AMS snapshot");
+      return;
+    }
+
     this.lastTrays = trays;
+    this.pendingTraySnapshotSignature = signature;
     clearTimeout(this.debounceTimer);
     this.debounceTimer = setTimeout(() => this.flushTrays(), this.config.syncDebounceMs);
   }
 
   flushTrays() {
-    this.logger.info(`AMS snapshot: ${this.lastTrays.length} loaded tagged tray(s)`);
-    this.onTrays(this.lastTrays).catch((error) => {
-      this.logger.error("Sync failed:", error.stack || error.message);
-    });
+    const trays = this.lastTrays;
+    const signature = this.pendingTraySnapshotSignature;
+    this.pendingTraySnapshotSignature = "";
+    this.forceNextTrayFlush = false;
+    this.logger.info(`AMS snapshot: ${trays.length} loaded tagged tray(s)`);
+    Promise.resolve()
+      .then(() => this.onTrays(trays))
+      .then(() => {
+        this.lastTraySnapshotSignature = signature;
+      })
+      .catch((error) => {
+        this.logger.error("Sync failed:", error.stack || error.message);
+      });
   }
 
   stop() {

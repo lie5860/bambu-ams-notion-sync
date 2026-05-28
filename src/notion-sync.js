@@ -184,6 +184,9 @@ export class NotionAmsSync {
     this.lastSignatures = new Map();
     this.lastTaskSignatures = new Map();
     this.activeTasks = new Map();
+    this.traySyncRunning = false;
+    this.pendingTraySync = null;
+    this.traySyncPromise = null;
     this.cloudTaskBatchMode = false;
     this.taskFilamentSpecPageCache = new Map();
     this.taskFilamentColorPageCache = new Map();
@@ -1489,15 +1492,42 @@ export class NotionAmsSync {
   async syncTrays(trays) {
     if (!this.amsSyncEnabled) return;
 
+    this.pendingTraySync = trays;
+    if (this.traySyncRunning) {
+      this.logger.debug("Queued latest AMS snapshot while previous sync is still running");
+      return this.traySyncPromise;
+    }
+
+    this.traySyncRunning = true;
+    this.traySyncPromise = (async () => {
+      try {
+        while (this.pendingTraySync) {
+          const nextTrays = this.pendingTraySync;
+          this.pendingTraySync = null;
+          await this.syncTrayBatch(nextTrays);
+        }
+      } finally {
+        this.traySyncRunning = false;
+        this.traySyncPromise = null;
+      }
+    })();
+
+    return this.traySyncPromise;
+  }
+
+  async syncTrayBatch(trays) {
+    if (!this.amsSyncEnabled) return;
+
     await this.ensureAmsSchema({ refresh: true });
     await this.ensureTaskFilamentColorSchema();
+    const colorAliases = await this.taskFilamentColorAliasMap();
 
     const seenAt = new Date();
     const uniqueTrays = uniqueByUid(trays);
     const activeUids = new Set(uniqueTrays.map((tray) => tray.uid));
 
     for (const tray of uniqueTrays) {
-      await this.syncTray(tray, seenAt);
+      await this.syncTray(tray, seenAt, colorAliases);
     }
 
     if (this.config.clearAbsentLoaded) {
@@ -1505,12 +1535,19 @@ export class NotionAmsSync {
     }
   }
 
-  async syncTray(tray, seenAt) {
+  async syncTray(tray, seenAt, colorAliases = null) {
     const page = await this.findPageByUid(tray.uid);
-    const colorMapping = await this.upsertTaskFilamentColor(tray.color);
-    const properties = this.buildTrayProperties(tray, seenAt, colorMapping?.alias);
+    const normalizedColor = normalizeColor(tray.color);
+    let colorAlias = normalizedColor && colorAliases?.has(normalizedColor) ? colorAliases.get(normalizedColor) : "";
+    if (normalizedColor && !colorAliases?.has(normalizedColor)) {
+      const colorMapping = await this.upsertTaskFilamentColor(tray.color);
+      colorAlias = colorMapping?.alias || "";
+      colorAliases?.set(normalizedColor, colorAlias);
+    }
+
+    const properties = this.buildTrayProperties(tray, seenAt, colorAlias);
     const icon = swatchIcon(tray.color);
-    const signature = JSON.stringify({ pageId: page?.id || null, properties, icon });
+    const signature = this.stableTraySignature(page, properties, icon);
 
     if (this.lastSignatures.get(tray.uid) === signature) {
       this.logger.debug(`No Notion changes for ${tray.uid} (${tray.slotLabel})`);
@@ -1518,6 +1555,12 @@ export class NotionAmsSync {
     }
 
     if (page) {
+      if (this.pageMatchesTray(page, tray, colorAlias, icon)) {
+        this.lastSignatures.set(tray.uid, signature);
+        this.logger.debug(`No Notion changes for ${tray.uid} (${tray.slotLabel})`);
+        return;
+      }
+
       await this.updatePage(page.id, properties, tray, icon);
       this.lastSignatures.set(tray.uid, signature);
       return;
@@ -1530,6 +1573,77 @@ export class NotionAmsSync {
 
     await this.createMissingPage(tray, properties, icon);
     this.lastSignatures.set(tray.uid, signature);
+  }
+
+  stableTraySignature(page, properties, icon) {
+    const lastSyncProp = this.config.properties.lastSync;
+    const lastSyncSchema = lastSyncProp ? this.schema[lastSyncProp] : null;
+    const lastSyncKey = lastSyncSchema ? propId(lastSyncProp, lastSyncSchema) : lastSyncProp;
+    const stableProperties = { ...properties };
+    if (lastSyncKey) delete stableProperties[lastSyncKey];
+    return JSON.stringify({ pageId: page?.id || null, properties: stableProperties, icon });
+  }
+
+  pageMatchesTray(page, tray, colorAlias, icon) {
+    const props = this.config.properties;
+    return (
+      this.pagePropertyMatches(page, props.title, this.displayTitle(tray)) &&
+      this.pagePropertyMatches(page, props.amsUid, tray.uid) &&
+      this.pagePropertyMatches(page, props.remainPercent, tray.remainPercent) &&
+      this.pagePropertyMatches(page, props.remainGrams, tray.remainGrams) &&
+      this.pagePropertyMatches(page, props.amsSlot, tray.slotLabel) &&
+      this.pagePropertyMatches(page, props.loaded, true) &&
+      this.pagePropertyMatches(page, props.printer, this.config.printerName) &&
+      this.pagePropertyMatches(page, props.material, tray.material) &&
+      this.pagePropertyMatches(page, props.color, tray.color) &&
+      this.pagePropertyMatches(page, props.colorAlias, colorLabel(tray.color, colorAlias)) &&
+      this.pagePropertyMatches(page, props.tagUid, tray.tagUid) &&
+      this.pagePropertyMatches(page, props.trayUuid, tray.trayUuid) &&
+      this.pagePropertyMatches(page, props.trayWeight, tray.trayWeight) &&
+      this.pageIconMatches(page.icon, icon)
+    );
+  }
+
+  pagePropertyMatches(page, propertyName, value) {
+    if (!propertyName) return true;
+    const schema = this.schema[propertyName];
+    if (!schema) return true;
+    const current = page.properties?.[propertyName];
+
+    switch (schema.type) {
+      case "title":
+      case "rich_text":
+      case "select":
+      case "status":
+      case "url":
+      case "email":
+      case "phone_number":
+        return getPlainText(current) === String(value == null ? "" : value);
+      case "number": {
+        const expected = value == null || value === "" ? null : Number(value);
+        const actual = current?.number == null ? null : Number(current.number);
+        return expected === actual;
+      }
+      case "checkbox":
+        return Boolean(current?.checkbox) === Boolean(value);
+      case "multi_select": {
+        const expected = (Array.isArray(value) ? value : value ? [value] : []).map(String).sort();
+        const actual = Array.isArray(current?.multi_select)
+          ? current.multi_select.map((item) => item.name).filter(Boolean).sort()
+          : [];
+        return JSON.stringify(expected) === JSON.stringify(actual);
+      }
+      default:
+        return true;
+    }
+  }
+
+  pageIconMatches(pageIcon, desiredIcon) {
+    if (!desiredIcon) return true;
+    const desiredUrl = desiredIcon.type === "external" ? desiredIcon.external?.url || "" : "";
+    if (!desiredUrl) return true;
+    const currentUrl = pageIcon?.type === "external" ? pageIcon.external?.url || "" : "";
+    return currentUrl === desiredUrl;
   }
 
   async findPageByUid(uid) {
@@ -2165,6 +2279,7 @@ export class NotionAmsSync {
     const alias = page ? getPlainText(page.properties?.[this.config.taskFilamentColorProperties.alias]) : "";
     const properties = this.buildTaskFilamentColorProperties(color);
     const icon = swatchIcon(color);
+    const result = page ? { id: page.id, alias, color } : null;
 
     if (this.config.dryRun) {
       this.logger.info(`[dry-run] Would ${page ? "update" : "create"} Notion filament color "${color}"`);
@@ -2172,12 +2287,16 @@ export class NotionAmsSync {
     }
 
     if (page) {
+      if (this.taskFilamentColorPageMatches(page, color, icon)) {
+        this.taskFilamentColorPageCache.set(color, result);
+        return result;
+      }
+
       await this.client.pages.update({
         page_id: page.id,
         properties,
         ...(icon ? { icon } : {})
       });
-      const result = { id: page.id, alias, color };
       this.taskFilamentColorPageCache.set(color, result);
       return result;
     }
@@ -2187,9 +2306,25 @@ export class NotionAmsSync {
       properties,
       ...(icon ? { icon } : {})
     });
-    const result = { id: created.id, alias: "", color };
-    this.taskFilamentColorPageCache.set(color, result);
-    return result;
+    const createdResult = { id: created.id, alias: "", color };
+    this.taskFilamentColorPageCache.set(color, createdResult);
+    return createdResult;
+  }
+
+  taskFilamentColorPageMatches(page, color, icon) {
+    const props = this.config.taskFilamentColorProperties;
+    const textMatches = (propertyName, value) => {
+      if (!propertyName) return true;
+      const schema = this.taskFilamentColorSchema?.[propertyName];
+      if (!schema) return true;
+      return getPlainText(page.properties?.[propertyName]) === String(value == null ? "" : value);
+    };
+
+    return (
+      textMatches(props.title, color) &&
+      textMatches(props.colorKey, color) &&
+      this.pageIconMatches(page.icon, icon)
+    );
   }
 
   async taskFilamentColorAliasMap() {
