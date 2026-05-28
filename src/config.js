@@ -114,8 +114,9 @@ export function loadConfig(source = process.env) {
       token: requiredFrom(source, "NOTION_TOKEN"),
       dataSourceId: notionIdFrom(source, "NOTION_DATA_SOURCE_ID"),
       amsDatabaseName: optionalFrom(source, "NOTION_AMS_DATABASE_NAME", "AMS 耗材"),
-      taskDatabaseName: optionalFrom(source, "NOTION_TASK_DATABASE_NAME", "打印任务"),
-      taskFilamentDatabaseName: optionalFrom(source, "NOTION_TASK_FILAMENT_DATABASE_NAME", "打印任务耗材"),
+      taskDatabaseName: optionalFrom(source, "NOTION_TASK_DATABASE_NAME", "打印记录"),
+      taskFilamentDatabaseName: optionalFrom(source, "NOTION_TASK_FILAMENT_DATABASE_NAME", "耗材用量明细"),
+      taskFilamentSpecDatabaseName: optionalFrom(source, "NOTION_TASK_FILAMENT_SPEC_DATABASE_NAME", "耗材色卡"),
       properties: {
         amsUid: optionalFrom(source, "NOTION_AMS_UID_PROP", "RFID Tag UID"),
         remainPercent: optionalFrom(source, "NOTION_REMAIN_PERCENT_PROP", "余量%"),
@@ -163,6 +164,7 @@ export function loadConfig(source = process.env) {
         title: optionalFrom(source, "NOTION_TASK_FILAMENT_TITLE_PROP", "任务耗材"),
         detailKey: optionalFrom(source, "NOTION_TASK_FILAMENT_KEY_PROP", "明细 Key"),
         task: optionalFrom(source, "NOTION_TASK_FILAMENT_TASK_PROP", "打印任务"),
+        spec: optionalFrom(source, "NOTION_TASK_FILAMENT_SPEC_PROP", "耗材规格"),
         taskKey: optionalFrom(source, "NOTION_TASK_FILAMENT_TASK_KEY_PROP", "任务 Key"),
         taskId: optionalFrom(source, "NOTION_TASK_FILAMENT_TASK_ID_PROP", "Task ID"),
         slot: optionalFrom(source, "NOTION_TASK_FILAMENT_SLOT_PROP", "槽位"),
@@ -170,7 +172,15 @@ export function loadConfig(source = process.env) {
         color: optionalFrom(source, "NOTION_TASK_FILAMENT_COLOR_PROP", "颜色"),
         weight: optionalFrom(source, "NOTION_TASK_FILAMENT_WEIGHT_PROP", "用量g"),
         percent: optionalFrom(source, "NOTION_TASK_FILAMENT_PERCENT_PROP", "占比%"),
+        startTime: optionalFrom(source, "NOTION_TASK_FILAMENT_START_TIME_PROP", "开始时间"),
         lastSync: optionalFrom(source, "NOTION_TASK_FILAMENT_LAST_SYNC_PROP", "最后同步时间")
+      },
+      taskFilamentSpecProperties: {
+        title: optionalFrom(source, "NOTION_TASK_FILAMENT_SPEC_TITLE_PROP", "耗材规格"),
+        specKey: optionalFrom(source, "NOTION_TASK_FILAMENT_SPEC_KEY_PROP", "规格 Key"),
+        material: optionalFrom(source, "NOTION_TASK_FILAMENT_SPEC_MATERIAL_PROP", "材料"),
+        color: optionalFrom(source, "NOTION_TASK_FILAMENT_SPEC_COLOR_PROP", "颜色"),
+        lastSync: optionalFrom(source, "NOTION_TASK_FILAMENT_SPEC_LAST_SYNC_PROP")
       },
       createMissingPages: boolFrom(source, "CREATE_MISSING_PAGES", true),
       missingPageTitlePrefix: optionalFrom(source, "MISSING_PAGE_TITLE_PREFIX", "待绑定耗材"),

@@ -153,14 +153,20 @@ export class NotionAmsSync {
     this.taskDatabaseId = null;
     this.taskDataSourceId = null;
     this.taskSchema = null;
+    this.taskFilamentSpecDataSourceId = null;
+    this.taskFilamentSpecSchema = null;
+    this.taskFilamentDatabaseId = null;
     this.taskFilamentDataSourceId = null;
     this.taskFilamentSchema = null;
     this.warnedMissingProperties = new Set();
     this.warnedMissingTaskProperties = new Set();
+    this.warnedMissingTaskFilamentSpecProperties = new Set();
     this.warnedMissingTaskFilamentProperties = new Set();
     this.lastSignatures = new Map();
     this.lastTaskSignatures = new Map();
     this.activeTasks = new Map();
+    this.cloudTaskBatchMode = false;
+    this.taskFilamentSpecPageCache = new Map();
   }
 
   installNotionRequestLimiter() {
@@ -190,7 +196,9 @@ export class NotionAmsSync {
     this.schema = dataSource.properties || {};
     await this.ensureAmsSchema();
     await this.ensureTaskDataSource();
+    await this.ensureTaskFilamentSpecDataSource();
     await this.ensureTaskFilamentDataSource();
+    await this.ensureTaskFilamentCustomStatsViews();
     await this.ensureTaskSchema({ refresh: true });
     await this.ensureTaskDefaultView();
     this.logger.info(
@@ -310,7 +318,7 @@ export class NotionAmsSync {
       return;
     }
 
-    const databaseName = this.config.taskDatabaseName || "打印任务";
+    const databaseName = this.config.taskDatabaseName || "打印记录";
     const existingDatabaseId = await this.findChildDatabase(this.parentPageId, databaseName);
     const database = existingDatabaseId
       ? await this.client.databases.retrieve({ database_id: existingDatabaseId })
@@ -336,13 +344,44 @@ export class NotionAmsSync {
     });
   }
 
+  async ensureTaskFilamentSpecDataSource() {
+    if (!this.parentPageId) {
+      this.logger.warn("Cannot infer Notion parent page for filament spec database; filament spec sync is disabled");
+      return;
+    }
+
+    const databaseName = this.config.taskFilamentSpecDatabaseName || "耗材色卡";
+    const existingDatabaseId = await this.findChildDatabase(this.parentPageId, databaseName);
+    const database = existingDatabaseId
+      ? await this.client.databases.retrieve({ database_id: existingDatabaseId })
+      : await this.createTaskFilamentSpecDatabase(this.parentPageId, databaseName);
+    const dataSourceId = database.data_sources?.[0]?.id;
+    if (!dataSourceId) throw new Error(`Filament spec database "${databaseName}" has no data source`);
+
+    this.taskFilamentSpecDataSourceId = dataSourceId;
+    this.logger.info(`Using Notion filament spec database "${databaseName}" data source ${dataSourceId}`);
+    await this.refreshTaskFilamentSpecSchema();
+    await this.ensureTaskFilamentSpecSchema();
+  }
+
+  async createTaskFilamentSpecDatabase(pageId, title) {
+    const properties = this.buildTaskFilamentSpecDatabaseProperties();
+    this.logger.info(`Creating Notion database "${title}" under page ${pageId}`);
+    return this.client.databases.create({
+      parent: { type: "page_id", page_id: pageId },
+      title: [{ type: "text", text: { content: title } }],
+      is_inline: false,
+      initial_data_source: { properties }
+    });
+  }
+
   async ensureTaskFilamentDataSource() {
     if (!this.parentPageId || !this.taskDataSourceId) {
       this.logger.warn("Cannot infer Notion parent page for print task filament database; filament usage sync is disabled");
       return;
     }
 
-    const databaseName = this.config.taskFilamentDatabaseName || "打印任务耗材";
+    const databaseName = this.config.taskFilamentDatabaseName || "耗材用量明细";
     const existingDatabaseId = await this.findChildDatabase(this.parentPageId, databaseName);
     const database = existingDatabaseId
       ? await this.client.databases.retrieve({ database_id: existingDatabaseId })
@@ -350,6 +389,7 @@ export class NotionAmsSync {
     const dataSourceId = database.data_sources?.[0]?.id;
     if (!dataSourceId) throw new Error(`Print task filament database "${databaseName}" has no data source`);
 
+    this.taskFilamentDatabaseId = database.id;
     this.taskFilamentDataSourceId = dataSourceId;
     this.logger.info(`Using Notion print task filament database "${databaseName}" data source ${dataSourceId}`);
     await this.refreshTaskFilamentSchema();
@@ -492,6 +532,16 @@ export class NotionAmsSync {
         }
       });
     }
+    if (props.spec && this.taskFilamentSpecDataSourceId) {
+      add(props.spec, {
+        type: "relation",
+        relation: {
+          data_source_id: this.taskFilamentSpecDataSourceId,
+          type: "single_property",
+          single_property: {}
+        }
+      });
+    }
     add(props.taskKey, { type: "rich_text", rich_text: {} });
     add(props.taskId, { type: "rich_text", rich_text: {} });
     add(props.slot, { type: "rich_text", rich_text: {} });
@@ -499,6 +549,25 @@ export class NotionAmsSync {
     add(props.color, { type: "rich_text", rich_text: {} });
     add(props.weight, { type: "number", number: { format: "number" } });
     add(props.percent, { type: "number", number: { format: "number" } });
+    add(props.startTime, { type: "date", date: {} });
+    add(props.lastSync, { type: "date", date: {} });
+
+    return properties;
+  }
+
+  buildTaskFilamentSpecDatabaseProperties() {
+    const props = this.config.taskFilamentSpecProperties;
+    const properties = {
+      [props.title]: { type: "title", title: {} }
+    };
+
+    const add = (name, schema) => {
+      if (name && name !== props.title) properties[name] = schema;
+    };
+
+    add(props.specKey, { type: "rich_text", rich_text: {} });
+    add(props.material, { type: "rich_text", rich_text: {} });
+    add(props.color, { type: "rich_text", rich_text: {} });
     add(props.lastSync, { type: "date", date: {} });
 
     return properties;
@@ -728,6 +797,147 @@ export class NotionAmsSync {
     };
   }
 
+  async ensureTaskFilamentCustomStatsViews() {
+    if (
+      !this.taskFilamentDatabaseId ||
+      !this.taskFilamentDataSourceId ||
+      !this.client.views?.list ||
+      !this.client.views?.create ||
+      !this.client.views?.update
+    ) {
+      return;
+    }
+
+    const viewRequests = [
+      {
+        name: "自定义统计",
+        type: "table",
+        sorts: this.taskFilamentCustomStatsViewSorts(),
+        configuration: this.taskFilamentCustomStatsTableConfiguration()
+      },
+      {
+        name: "自定义统计图",
+        type: "chart",
+        configuration: this.taskFilamentCustomStatsChartConfiguration()
+      }
+    ].filter((request) => request.configuration);
+
+    if (viewRequests.length === 0) return;
+
+    const viewRefs = await this.client.views.list({ data_source_id: this.taskFilamentDataSourceId, page_size: 100 });
+    for (const request of viewRequests) {
+      const existing = await this.findTaskFilamentViewByName(viewRefs.results || [], request.name);
+      try {
+        if (existing?.type === request.type) {
+          await this.client.views.update({ view_id: existing.id, ...request });
+          this.logger.info(`Updated Notion print task filament view "${request.name}"`);
+          continue;
+        }
+
+        await this.client.views.create({
+          data_source_id: this.taskFilamentDataSourceId,
+          database_id: this.taskFilamentDatabaseId,
+          ...request,
+          position: { type: "end" }
+        });
+        this.logger.info(`Created Notion print task filament view "${request.name}"`);
+      } catch (error) {
+        this.logger.warn(`Cannot configure Notion print task filament view "${request.name}": ${error.message}`);
+      }
+    }
+  }
+
+  async findTaskFilamentViewByName(viewRefs, name) {
+    for (const ref of viewRefs) {
+      try {
+        const view = await this.client.views.retrieve({ view_id: ref.id });
+        if (view.name === name) return view;
+      } catch (error) {
+        this.logger.warn(`Cannot inspect Notion print task filament view ${ref.id}: ${error.message}`);
+      }
+    }
+    return null;
+  }
+
+  taskFilamentCustomStatsViewSorts() {
+    const props = this.config.taskFilamentProperties;
+    const startTime = this.taskFilamentSchema?.[props.startTime];
+    const weight = this.taskFilamentSchema?.[props.weight];
+    return [
+      startTime ? { property: propId(props.startTime, startTime), direction: "descending" } : null,
+      weight ? { property: propId(props.weight, weight), direction: "descending" } : null
+    ].filter(Boolean);
+  }
+
+  taskFilamentCustomStatsTableConfiguration() {
+    const props = this.config.taskFilamentProperties;
+    const visiblePropertyNames = [
+      props.title,
+      props.spec,
+      props.weight,
+      props.task,
+      props.startTime
+    ].filter(Boolean);
+    const propertyNames = uniq([
+      ...visiblePropertyNames,
+      ...Object.keys(this.taskFilamentSchema || {})
+    ]);
+    const visibleNames = new Set(visiblePropertyNames);
+    const properties = propertyNames.map((name) => {
+      const schema = this.taskFilamentSchema[name];
+      if (!schema) return null;
+      return {
+        property_id: propId(name, schema),
+        visible: visibleNames.has(name),
+        wrap: true
+      };
+    }).filter(Boolean);
+    const spec = this.taskFilamentSchema?.[props.spec];
+
+    return {
+      type: "table",
+      properties,
+      wrap_cells: true,
+      ...(spec
+        ? {
+            group_by: {
+              type: "relation",
+              property_id: propId(props.spec, spec),
+              sort: { type: "ascending" },
+              hide_empty_groups: true
+            }
+          }
+        : {})
+    };
+  }
+
+  taskFilamentCustomStatsChartConfiguration() {
+    const props = this.config.taskFilamentProperties;
+    const spec = this.taskFilamentSchema?.[props.spec];
+    const weight = this.taskFilamentSchema?.[props.weight];
+    if (!spec || !weight) return null;
+
+    return {
+      type: "chart",
+      chart_type: "bar",
+      x_axis: {
+        type: "relation",
+        property_id: propId(props.spec, spec),
+        sort: { type: "ascending" },
+        hide_empty_groups: true
+      },
+      y_axis: {
+        aggregator: "sum",
+        property_id: propId(props.weight, weight)
+      },
+      sort: "y_descending",
+      color_theme: "colorful",
+      height: "medium",
+      legend_position: "bottom",
+      hide_empty_groups: true
+    };
+  }
+
   async ensureTaskTitleProperty() {
     const titleName = this.config.taskProperties.title;
     if (!titleName) return false;
@@ -806,6 +1016,117 @@ export class NotionAmsSync {
   async createTaskProperty(name, schema) {
     await this.client.dataSources.update({
       data_source_id: this.taskDataSourceId,
+      properties: {
+        [name]: schema
+      }
+    });
+  }
+
+  async refreshTaskFilamentSpecSchema() {
+    if (!this.taskFilamentSpecDataSourceId) return null;
+    const dataSource = await this.client.dataSources.retrieve({ data_source_id: this.taskFilamentSpecDataSourceId });
+    this.taskFilamentSpecSchema = dataSource.properties || {};
+    return this.taskFilamentSpecSchema;
+  }
+
+  async ensureTaskFilamentSpecSchema({ refresh = false } = {}) {
+    if (!this.taskFilamentSpecDataSourceId) return;
+    if (refresh) await this.refreshTaskFilamentSpecSchema();
+
+    let changed = await this.ensureTaskFilamentSpecTitleProperty();
+    const expectedProperties = this.buildTaskFilamentSpecDatabaseProperties();
+
+    for (const [name, expectedSchema] of Object.entries(expectedProperties)) {
+      if (name === this.config.taskFilamentSpecProperties.title || expectedSchema.type === "title") continue;
+      if (await this.ensureTaskFilamentSpecProperty(name, expectedSchema)) changed = true;
+    }
+
+    if (changed) {
+      await this.refreshTaskFilamentSpecSchema();
+      this.warnedMissingTaskFilamentSpecProperties.clear();
+    }
+
+    this.assertTaskFilamentSpecProperty(this.config.taskFilamentSpecProperties.specKey, "filament spec lookup");
+  }
+
+  async ensureTaskFilamentSpecTitleProperty() {
+    const titleName = this.config.taskFilamentSpecProperties.title;
+    if (!titleName) return false;
+
+    const existing = this.taskFilamentSpecSchema[titleName];
+    if (existing?.type === "title") return false;
+
+    let changed = false;
+    if (existing) {
+      const tempName = this.availableTaskFilamentSpecTempPropertyName(titleName);
+      await this.renameTaskFilamentSpecProperty(titleName, tempName);
+      this.logger.warn(
+        `Notion filament spec property "${titleName}" has type "${existing.type}", expected "title"; renamed it to "${tempName}"`
+      );
+      await this.refreshTaskFilamentSpecSchema();
+      changed = true;
+    }
+
+    const titleProperty = this.findTaskFilamentSpecTitleProperty();
+    if (!titleProperty) throw new Error("Notion filament spec database has no title property");
+
+    if (titleProperty.name !== titleName) {
+      await this.renameTaskFilamentSpecProperty(titleProperty.name, titleName);
+      this.logger.info(`Renamed Notion filament spec title property "${titleProperty.name}" to "${titleName}"`);
+      changed = true;
+    }
+
+    return changed;
+  }
+
+  async ensureTaskFilamentSpecProperty(name, expectedSchema) {
+    if (!name) return false;
+
+    const existing = this.taskFilamentSpecSchema[name];
+    if (!existing) {
+      await this.createTaskFilamentSpecProperty(name, expectedSchema);
+      this.logger.info(`Created missing Notion filament spec property "${name}" (${expectedSchema.type})`);
+      await this.refreshTaskFilamentSpecSchema();
+      return true;
+    }
+
+    if (existing.type === expectedSchema.type) return false;
+
+    const tempName = this.availableTaskFilamentSpecTempPropertyName(name);
+    await this.renameTaskFilamentSpecProperty(name, tempName);
+    this.logger.warn(
+      `Notion filament spec property "${name}" has type "${existing.type}", expected "${expectedSchema.type}"; renamed it to "${tempName}"`
+    );
+    await this.refreshTaskFilamentSpecSchema();
+
+    await this.createTaskFilamentSpecProperty(name, expectedSchema);
+    this.logger.info(`Created replacement Notion filament spec property "${name}" (${expectedSchema.type})`);
+    await this.refreshTaskFilamentSpecSchema();
+    return true;
+  }
+
+  availableTaskFilamentSpecTempPropertyName(name) {
+    const names = new Set(Object.keys(this.taskFilamentSpecSchema || {}));
+    const base = `${name}-temp`;
+    if (!names.has(base)) return base;
+
+    let index = 1;
+    while (names.has(`${base}-${index}`)) index += 1;
+    return `${base}-${index}`;
+  }
+
+  async renameTaskFilamentSpecProperty(name, nextName) {
+    await this.client.dataSources.update({
+      data_source_id: this.taskFilamentSpecDataSourceId,
+      properties: {
+        [name]: { name: nextName }
+      }
+    });
+  }
+
+  async createTaskFilamentSpecProperty(name, schema) {
+    await this.client.dataSources.update({
+      data_source_id: this.taskFilamentSpecDataSourceId,
       properties: {
         [name]: schema
       }
@@ -1148,10 +1469,15 @@ export class NotionAmsSync {
     await this.ensureTaskSchema({ refresh: true });
     this.logger.info(`Syncing ${tasks.length} Bambu cloud print task(s) into Notion`);
 
-    for (const task of tasks) {
-      const record = this.printTaskRecordFromCloudTask(task);
-      if (!record) continue;
-      await this.upsertPrintTask(record);
+    this.cloudTaskBatchMode = true;
+    try {
+      for (const task of tasks) {
+        const record = this.printTaskRecordFromCloudTask(task);
+        if (!record) continue;
+        await this.upsertPrintTask(record);
+      }
+    } finally {
+      this.cloudTaskBatchMode = false;
     }
   }
 
@@ -1413,7 +1739,7 @@ export class NotionAmsSync {
   }
 
   async upsertPrintTask(record) {
-    await this.ensureTaskSchema({ refresh: true });
+    await this.ensureTaskSchema({ refresh: !this.cloudTaskBatchMode });
     const pages = await this.findTaskPagesByKey(record.taskKey);
     const canonical = pages.length > 0 ? this.chooseCanonicalTaskPage(pages) : null;
     const media = await this.prepareTaskMedia(record, canonical);
@@ -1460,7 +1786,8 @@ export class NotionAmsSync {
       await this.markDuplicateTaskPages(record.taskKey, freshPages, freshCanonical.id);
     }
 
-    const usagePageIds = await this.syncTaskFilamentUsages(record, pageId);
+    const usagePages = await this.syncTaskFilamentUsages(record, pageId);
+    const usagePageIds = usagePages.map((item) => item.pageId).filter(Boolean);
     if (usagePageIds.length > 0) {
       await this.updateTaskFilamentUsageRelation(pageId, usagePageIds);
     }
@@ -1517,22 +1844,69 @@ export class NotionAmsSync {
     const usages = record.filamentUsages || [];
     if (!this.taskFilamentDataSourceId || !taskPageId || usages.length === 0) return [];
 
-    await this.ensureTaskFilamentSchema({ refresh: true });
+    const refreshSchema = !this.cloudTaskBatchMode;
+    await this.ensureTaskFilamentSchema({ refresh: refreshSchema });
+    await this.ensureTaskFilamentSpecSchema({ refresh: refreshSchema });
 
     const ids = [];
     for (const usage of usages) {
-      const page = await this.upsertTaskFilamentUsage(record, taskPageId, usage);
-      if (page?.id) ids.push(page.id);
+      const specPage = await this.upsertTaskFilamentSpec(usage);
+      const page = await this.upsertTaskFilamentUsage(record, taskPageId, usage, specPage?.id || "");
+      if (page?.id) {
+        ids.push({
+          pageId: page.id,
+          usage,
+          specPageId: specPage?.id || "",
+          specKey: this.filamentSpecKey(usage)
+        });
+      }
     }
     return ids;
   }
 
-  async upsertTaskFilamentUsage(record, taskPageId, usage) {
+  async upsertTaskFilamentSpec(usage) {
+    if (!this.taskFilamentSpecDataSourceId) return null;
+
+    const specKey = this.filamentSpecKey(usage);
+    const cached = this.taskFilamentSpecPageCache.get(specKey);
+    if (cached) return cached;
+
+    const pages = await this.findTaskFilamentSpecPagesByKey(specKey);
+    const page = pages[0] || null;
+    const title = this.taskFilamentSpecTitle(usage);
+    const properties = this.buildTaskFilamentSpecProperties(usage, specKey, title);
+    const icon = swatchIcon(usage.color);
+
+    if (this.config.dryRun) {
+      this.logger.info(`[dry-run] Would ${page ? "update" : "create"} Notion filament spec "${title}"`);
+      return null;
+    }
+
+    if (page) {
+      await this.client.pages.update({
+        page_id: page.id,
+        properties,
+        ...(icon ? { icon } : {})
+      });
+      this.taskFilamentSpecPageCache.set(specKey, page);
+      return page;
+    }
+
+    const created = await this.client.pages.create({
+      parent: { data_source_id: this.taskFilamentSpecDataSourceId },
+      properties,
+      ...(icon ? { icon } : {})
+    });
+    this.taskFilamentSpecPageCache.set(specKey, created);
+    return created;
+  }
+
+  async upsertTaskFilamentUsage(record, taskPageId, usage, specPageId = "") {
     const detailKey = `${record.taskKey}:filament:${usage.index}`;
     const pages = await this.findTaskFilamentPagesByKey(detailKey);
     const page = pages[0] || null;
     const title = this.taskFilamentUsageTitle(usage);
-    const properties = this.buildTaskFilamentUsageProperties(record, taskPageId, usage, detailKey, title);
+    const properties = this.buildTaskFilamentUsageProperties(record, taskPageId, usage, detailKey, title, specPageId);
     const icon = swatchIcon(usage.color);
 
     if (this.config.dryRun) {
@@ -1581,6 +1955,17 @@ export class NotionAmsSync {
     return response.results || [];
   }
 
+  async findTaskFilamentSpecPagesByKey(specKey) {
+    const propName = this.config.taskFilamentSpecProperties.specKey;
+    const propSchema = this.assertTaskFilamentSpecProperty(propName, "filament spec lookup");
+    const response = await this.client.dataSources.query({
+      data_source_id: this.taskFilamentSpecDataSourceId,
+      filter: filterForExactValue(propName, propSchema, specKey),
+      page_size: 100
+    });
+    return response.results || [];
+  }
+
   taskFilamentUsageTitle(usage) {
     return [
       usage.material || "耗材",
@@ -1588,12 +1973,32 @@ export class NotionAmsSync {
     ].filter(Boolean).join(" ");
   }
 
-  buildTaskFilamentUsageProperties(record, taskPageId, usage, detailKey, title) {
+  filamentSpecKey(usage) {
+    return `${usage.material || "耗材"}:${usage.color || "unknown"}`;
+  }
+
+  taskFilamentSpecTitle(usage) {
+    return usage.material || "耗材";
+  }
+
+  buildTaskFilamentSpecProperties(usage, specKey, title) {
+    const props = this.config.taskFilamentSpecProperties;
+    return compactObject([
+      this.taskFilamentSpecValueFor(props.title, title),
+      this.taskFilamentSpecValueFor(props.specKey, specKey),
+      this.taskFilamentSpecValueFor(props.material, usage.material),
+      this.taskFilamentSpecValueFor(props.color, usage.color),
+      this.taskFilamentSpecValueFor(props.lastSync, new Date())
+    ]);
+  }
+
+  buildTaskFilamentUsageProperties(record, taskPageId, usage, detailKey, title, specPageId) {
     const props = this.config.taskFilamentProperties;
     return compactObject([
       this.taskFilamentValueFor(props.title, title),
       this.taskFilamentValueFor(props.detailKey, detailKey),
       this.taskFilamentValueFor(props.task, [taskPageId]),
+      this.taskFilamentValueFor(props.spec, specPageId ? [specPageId] : []),
       this.taskFilamentValueFor(props.taskKey, record.taskKey),
       this.taskFilamentValueFor(props.taskId, record.taskId),
       this.taskFilamentValueFor(props.slot, usage.slot),
@@ -1601,6 +2006,7 @@ export class NotionAmsSync {
       this.taskFilamentValueFor(props.color, usage.color),
       this.taskFilamentValueFor(props.weight, usage.weight),
       this.taskFilamentValueFor(props.percent, usage.percent),
+      this.taskFilamentValueFor(props.startTime, record.startTime),
       this.taskFilamentValueFor(props.lastSync, new Date())
     ]);
   }
@@ -1857,6 +2263,30 @@ export class NotionAmsSync {
     }
   }
 
+  taskFilamentSpecValueFor(propertyName, value) {
+    if (!propertyName || value === undefined) return null;
+    const schema = this.taskFilamentSpecSchema[propertyName];
+    if (!schema) {
+      if (!this.warnedMissingTaskFilamentSpecProperties.has(propertyName)) {
+        this.warnedMissingTaskFilamentSpecProperties.add(propertyName);
+        this.logger.warn(`Notion filament spec property "${propertyName}" does not exist; ignoring it`);
+      }
+      return null;
+    }
+
+    const property = propId(propertyName, schema);
+    switch (schema.type) {
+      case "title":
+        return [property, { title: textContent(value) }];
+      case "rich_text":
+        return [property, { rich_text: textContent(value) }];
+      case "date":
+        return [property, { date: value ? { start: value instanceof Date ? value.toISOString() : String(value) } : null }];
+      default:
+        return null;
+    }
+  }
+
   async queryAll(filter) {
     const results = [];
     let startCursor;
@@ -1893,6 +2323,12 @@ export class NotionAmsSync {
     return schema;
   }
 
+  assertTaskFilamentSpecProperty(propertyName, label) {
+    const schema = this.taskFilamentSpecSchema?.[propertyName];
+    if (!schema) throw new Error(`Notion filament spec property "${propertyName}" is required for ${label}`);
+    return schema;
+  }
+
   findTitleProperty() {
     const configured = this.config.properties.title;
     if (configured && this.schema[configured]?.type === "title") {
@@ -1925,4 +2361,16 @@ export class NotionAmsSync {
       Object.entries(this.taskFilamentSchema).find(([, propertySchema]) => propertySchema.type === "title") || [];
     return name ? { name, schema } : null;
   }
+
+  findTaskFilamentSpecTitleProperty() {
+    const configured = this.config.taskFilamentSpecProperties.title;
+    if (configured && this.taskFilamentSpecSchema[configured]?.type === "title") {
+      return { name: configured, schema: this.taskFilamentSpecSchema[configured] };
+    }
+
+    const [name, schema] =
+      Object.entries(this.taskFilamentSpecSchema).find(([, propertySchema]) => propertySchema.type === "title") || [];
+    return name ? { name, schema } : null;
+  }
+
 }
