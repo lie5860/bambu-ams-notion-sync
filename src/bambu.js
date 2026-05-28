@@ -104,11 +104,12 @@ export function extractAmsTrays(message, config) {
 }
 
 export class BambuMqttClient {
-  constructor(config, logger, onTrays, onPrinterStatus = null) {
+  constructor(config, logger, onTrays, onPrinterStatus = null, onReady = null) {
     this.config = config;
     this.logger = logger;
     this.onTrays = onTrays;
     this.onPrinterStatus = onPrinterStatus;
+    this.onReady = onReady;
     this.client = null;
     this.pushAllTimer = null;
     this.debounceTimer = null;
@@ -141,6 +142,11 @@ export class BambuMqttClient {
 
         this.logger.info(`Subscribed to ${reportTopic}`);
         if (this.config.pushAllOnStart) this.requestPushAll();
+        if (this.onReady) {
+          Promise.resolve(this.onReady()).catch((readyError) => {
+            this.logger.error("MQTT ready callback failed:", readyError.stack || readyError.message);
+          });
+        }
       });
 
       if (this.config.pushAllIntervalMs > 0) {

@@ -117,6 +117,7 @@ export function loadConfig(source = process.env) {
       taskDatabaseName: optionalFrom(source, "NOTION_TASK_DATABASE_NAME", "打印记录"),
       taskFilamentDatabaseName: optionalFrom(source, "NOTION_TASK_FILAMENT_DATABASE_NAME", "耗材用量明细"),
       taskFilamentSpecDatabaseName: optionalFrom(source, "NOTION_TASK_FILAMENT_SPEC_DATABASE_NAME", "耗材色卡"),
+      taskFilamentColorDatabaseName: optionalFrom(source, "NOTION_TASK_FILAMENT_COLOR_DATABASE_NAME", "颜色映射"),
       properties: {
         amsUid: optionalFrom(source, "NOTION_AMS_UID_PROP", "RFID Tag UID"),
         remainPercent: optionalFrom(source, "NOTION_REMAIN_PERCENT_PROP", "余量%"),
@@ -126,7 +127,8 @@ export function loadConfig(source = process.env) {
         lastSync: optionalFrom(source, "NOTION_LAST_SYNC_PROP", "最后同步时间"),
         printer: optionalFrom(source, "NOTION_PRINTER_PROP"),
         material: optionalFrom(source, "NOTION_MATERIAL_PROP", "材料"),
-        color: optionalFrom(source, "NOTION_COLOR_PROP"),
+        color: optionalFrom(source, "NOTION_COLOR_PROP", "颜色"),
+        colorAlias: optionalFrom(source, "NOTION_COLOR_ALIAS_PROP", "颜色别名"),
         tagUid: optionalFrom(source, "NOTION_TAG_UID_PROP"),
         trayUuid: optionalFrom(source, "NOTION_TRAY_UUID_PROP", "Tray UUID"),
         trayWeight: optionalFrom(source, "NOTION_TRAY_WEIGHT_PROP", "料盘重量g"),
@@ -173,6 +175,7 @@ export function loadConfig(source = process.env) {
         weight: optionalFrom(source, "NOTION_TASK_FILAMENT_WEIGHT_PROP", "用量g"),
         percent: optionalFrom(source, "NOTION_TASK_FILAMENT_PERCENT_PROP", "占比%"),
         startTime: optionalFrom(source, "NOTION_TASK_FILAMENT_START_TIME_PROP", "开始时间"),
+        status: optionalFrom(source, "NOTION_TASK_FILAMENT_STATUS_PROP", "任务状态"),
         lastSync: optionalFrom(source, "NOTION_TASK_FILAMENT_LAST_SYNC_PROP", "最后同步时间")
       },
       taskFilamentSpecProperties: {
@@ -182,6 +185,12 @@ export function loadConfig(source = process.env) {
         color: optionalFrom(source, "NOTION_TASK_FILAMENT_SPEC_COLOR_PROP", "颜色"),
         lastSync: optionalFrom(source, "NOTION_TASK_FILAMENT_SPEC_LAST_SYNC_PROP")
       },
+      taskFilamentColorProperties: {
+        title: optionalFrom(source, "NOTION_TASK_FILAMENT_COLOR_TITLE_PROP", "色号"),
+        colorKey: optionalFrom(source, "NOTION_TASK_FILAMENT_COLOR_KEY_PROP", "颜色 Key"),
+        alias: optionalFrom(source, "NOTION_TASK_FILAMENT_COLOR_ALIAS_PROP", "颜色别名"),
+        lastSync: optionalFrom(source, "NOTION_TASK_FILAMENT_COLOR_LAST_SYNC_PROP")
+      },
       createMissingPages: boolFrom(source, "CREATE_MISSING_PAGES", true),
       missingPageTitlePrefix: optionalFrom(source, "MISSING_PAGE_TITLE_PREFIX", "待绑定耗材"),
       clearAbsentLoaded: boolFrom(source, "CLEAR_ABSENT_LOADED", false),
@@ -189,7 +198,9 @@ export function loadConfig(source = process.env) {
       printTaskProgressStep: intFrom(source, "PRINT_TASK_PROGRESS_STEP", 5),
       printTaskHistorySyncOnStart: boolFrom(source, "PRINT_TASK_HISTORY_SYNC_ON_START", true),
       printTaskHistoryLimit: intFrom(source, "PRINT_TASK_HISTORY_LIMIT", 0),
-      printTaskHistoryPageSize: intFrom(source, "PRINT_TASK_HISTORY_PAGE_SIZE", 100)
+      printTaskHistoryPageSize: intFrom(source, "PRINT_TASK_HISTORY_PAGE_SIZE", 100),
+      printTaskHistoryMinIntervalMs: intFrom(source, "PRINT_TASK_HISTORY_MIN_INTERVAL_MS", 300000),
+      printTaskHistoryLastTaskTime: optionalFrom(source, "PRINT_TASK_HISTORY_LAST_TASK_TIME")
     },
     dryRun: boolFrom(source, "DRY_RUN", true),
     logLevel: optionalFrom(source, "LOG_LEVEL", "info")

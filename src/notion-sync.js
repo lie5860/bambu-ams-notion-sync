@@ -7,7 +7,7 @@ import {
   propertyPayload
 } from "./notion-properties.js";
 
-const NOTION_MIN_REQUEST_INTERVAL_MS = 400;
+const NOTION_MIN_REQUEST_INTERVAL_MS = 1000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -55,6 +55,15 @@ function toIsoDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+function isoTimeMs(value) {
+  const millis = Date.parse(value || "");
+  return Number.isFinite(millis) ? millis : 0;
+}
+
+function printTaskRecordHistoryTimeMs(record) {
+  return Math.max(isoTimeMs(record?.endTime), isoTimeMs(record?.startTime));
+}
+
 function hashString(value) {
   return createHash("sha1").update(String(value)).digest("hex").slice(0, 16);
 }
@@ -97,6 +106,12 @@ function roundNumber(value, digits = 2) {
 function normalizeColor(value) {
   const hex = String(value || "").replace("#", "").slice(0, 6).toUpperCase();
   return /^[0-9A-F]{6}$/.test(hex) ? `#${hex}` : "";
+}
+
+function colorLabel(value, alias = "") {
+  const aliasText = String(alias || "").trim();
+  if (aliasText) return aliasText;
+  return normalizeColor(value);
 }
 
 function getFileValues(propertyValue) {
@@ -155,18 +170,23 @@ export class NotionAmsSync {
     this.taskSchema = null;
     this.taskFilamentSpecDataSourceId = null;
     this.taskFilamentSpecSchema = null;
+    this.taskFilamentColorDatabaseId = null;
+    this.taskFilamentColorDataSourceId = null;
+    this.taskFilamentColorSchema = null;
     this.taskFilamentDatabaseId = null;
     this.taskFilamentDataSourceId = null;
     this.taskFilamentSchema = null;
     this.warnedMissingProperties = new Set();
     this.warnedMissingTaskProperties = new Set();
     this.warnedMissingTaskFilamentSpecProperties = new Set();
+    this.warnedMissingTaskFilamentColorProperties = new Set();
     this.warnedMissingTaskFilamentProperties = new Set();
     this.lastSignatures = new Map();
     this.lastTaskSignatures = new Map();
     this.activeTasks = new Map();
     this.cloudTaskBatchMode = false;
     this.taskFilamentSpecPageCache = new Map();
+    this.taskFilamentColorPageCache = new Map();
   }
 
   installNotionRequestLimiter() {
@@ -186,7 +206,7 @@ export class NotionAmsSync {
     };
   }
 
-  async init() {
+  async init({ deferMaintenance = false } = {}) {
     if (!this.client.dataSources?.retrieve || !this.client.dataSources?.query || !this.client.dataSources?.update) {
       throw new Error("Installed @notionhq/client does not support dataSources. Run npm install with the bundled package.json.");
     }
@@ -196,14 +216,21 @@ export class NotionAmsSync {
     this.schema = dataSource.properties || {};
     await this.ensureAmsSchema();
     await this.ensureTaskDataSource();
+    await this.ensureTaskFilamentColorDataSource();
     await this.ensureTaskFilamentSpecDataSource();
     await this.ensureTaskFilamentDataSource();
-    await this.ensureTaskFilamentCustomStatsViews();
     await this.ensureTaskSchema({ refresh: true });
-    await this.ensureTaskDefaultView();
+    if (!deferMaintenance) await this.runStartupMaintenance();
     this.logger.info(
       `Loaded Notion data source ${this.config.dataSourceId} schema with ${Object.keys(this.schema).length} properties`
     );
+  }
+
+  async runStartupMaintenance() {
+    await this.syncAmsColorAliasesFromColorMappings();
+    await this.syncTaskFilamentSpecTitlesFromColorMappings();
+    await this.ensureTaskFilamentCustomStatsViews();
+    await this.ensureTaskDefaultView();
   }
 
   async resolveDataSource(id) {
@@ -344,6 +371,38 @@ export class NotionAmsSync {
     });
   }
 
+  async ensureTaskFilamentColorDataSource() {
+    if (!this.parentPageId) {
+      this.logger.warn("Cannot infer Notion parent page for filament color database; filament color sync is disabled");
+      return;
+    }
+
+    const databaseName = this.config.taskFilamentColorDatabaseName || "颜色映射";
+    const existingDatabaseId = await this.findChildDatabase(this.parentPageId, databaseName);
+    const database = existingDatabaseId
+      ? await this.client.databases.retrieve({ database_id: existingDatabaseId })
+      : await this.createTaskFilamentColorDatabase(this.parentPageId, databaseName);
+    const dataSourceId = database.data_sources?.[0]?.id;
+    if (!dataSourceId) throw new Error(`Filament color database "${databaseName}" has no data source`);
+
+    this.taskFilamentColorDatabaseId = database.id;
+    this.taskFilamentColorDataSourceId = dataSourceId;
+    this.logger.info(`Using Notion filament color database "${databaseName}" data source ${dataSourceId}`);
+    await this.refreshTaskFilamentColorSchema();
+    await this.ensureTaskFilamentColorSchema();
+  }
+
+  async createTaskFilamentColorDatabase(pageId, title) {
+    const properties = this.buildTaskFilamentColorDatabaseProperties();
+    this.logger.info(`Creating Notion database "${title}" under page ${pageId}`);
+    return this.client.databases.create({
+      parent: { type: "page_id", page_id: pageId },
+      title: [{ type: "text", text: { content: title } }],
+      is_inline: false,
+      initial_data_source: { properties }
+    });
+  }
+
   async ensureTaskFilamentSpecDataSource() {
     if (!this.parentPageId) {
       this.logger.warn("Cannot infer Notion parent page for filament spec database; filament spec sync is disabled");
@@ -426,6 +485,7 @@ export class NotionAmsSync {
     add(props.printer, { type: "rich_text", rich_text: {} });
     add(props.material, { type: "rich_text", rich_text: {} });
     add(props.color, { type: "rich_text", rich_text: {} });
+    add(props.colorAlias, { type: "rich_text", rich_text: {} });
     add(props.tagUid, { type: "rich_text", rich_text: {} });
     add(props.trayUuid, { type: "rich_text", rich_text: {} });
     add(props.trayWeight, { type: "number", number: { format: "number" } });
@@ -550,6 +610,19 @@ export class NotionAmsSync {
     add(props.weight, { type: "number", number: { format: "number" } });
     add(props.percent, { type: "number", number: { format: "number" } });
     add(props.startTime, { type: "date", date: {} });
+    add(props.status, {
+      type: "select",
+      select: {
+        options: [
+          { name: "运行中", color: "blue" },
+          { name: "暂停", color: "yellow" },
+          { name: "已完成", color: "green" },
+          { name: "失败", color: "red" },
+          { name: "已取消", color: "gray" },
+          { name: "未知", color: "default" }
+        ]
+      }
+    });
     add(props.lastSync, { type: "date", date: {} });
 
     return properties;
@@ -568,6 +641,23 @@ export class NotionAmsSync {
     add(props.specKey, { type: "rich_text", rich_text: {} });
     add(props.material, { type: "rich_text", rich_text: {} });
     add(props.color, { type: "rich_text", rich_text: {} });
+    add(props.lastSync, { type: "date", date: {} });
+
+    return properties;
+  }
+
+  buildTaskFilamentColorDatabaseProperties() {
+    const props = this.config.taskFilamentColorProperties;
+    const properties = {
+      [props.title]: { type: "title", title: {} }
+    };
+
+    const add = (name, schema) => {
+      if (name && name !== props.title) properties[name] = schema;
+    };
+
+    add(props.colorKey, { type: "rich_text", rich_text: {} });
+    add(props.alias, { type: "rich_text", rich_text: {} });
     add(props.lastSync, { type: "date", date: {} });
 
     return properties;
@@ -812,12 +902,14 @@ export class NotionAmsSync {
       {
         name: "自定义统计",
         type: "table",
+        filter: this.taskFilamentCustomStatsFilter(),
         sorts: this.taskFilamentCustomStatsViewSorts(),
         configuration: this.taskFilamentCustomStatsTableConfiguration()
       },
       {
         name: "自定义统计图",
         type: "chart",
+        filter: this.taskFilamentCustomStatsFilter(),
         configuration: this.taskFilamentCustomStatsChartConfiguration()
       }
     ].filter((request) => request.configuration);
@@ -867,6 +959,17 @@ export class NotionAmsSync {
       startTime ? { property: propId(props.startTime, startTime), direction: "descending" } : null,
       weight ? { property: propId(props.weight, weight), direction: "descending" } : null
     ].filter(Boolean);
+  }
+
+  taskFilamentCustomStatsFilter() {
+    const props = this.config.taskFilamentProperties;
+    const status = this.taskFilamentSchema?.[props.status];
+    if (!status) return undefined;
+
+    return {
+      property: propId(props.status, status),
+      select: { does_not_equal: "失败" }
+    };
   }
 
   taskFilamentCustomStatsTableConfiguration() {
@@ -1016,6 +1119,117 @@ export class NotionAmsSync {
   async createTaskProperty(name, schema) {
     await this.client.dataSources.update({
       data_source_id: this.taskDataSourceId,
+      properties: {
+        [name]: schema
+      }
+    });
+  }
+
+  async refreshTaskFilamentColorSchema() {
+    if (!this.taskFilamentColorDataSourceId) return null;
+    const dataSource = await this.client.dataSources.retrieve({ data_source_id: this.taskFilamentColorDataSourceId });
+    this.taskFilamentColorSchema = dataSource.properties || {};
+    return this.taskFilamentColorSchema;
+  }
+
+  async ensureTaskFilamentColorSchema({ refresh = false } = {}) {
+    if (!this.taskFilamentColorDataSourceId) return;
+    if (refresh) await this.refreshTaskFilamentColorSchema();
+
+    let changed = await this.ensureTaskFilamentColorTitleProperty();
+    const expectedProperties = this.buildTaskFilamentColorDatabaseProperties();
+
+    for (const [name, expectedSchema] of Object.entries(expectedProperties)) {
+      if (name === this.config.taskFilamentColorProperties.title || expectedSchema.type === "title") continue;
+      if (await this.ensureTaskFilamentColorProperty(name, expectedSchema)) changed = true;
+    }
+
+    if (changed) {
+      await this.refreshTaskFilamentColorSchema();
+      this.warnedMissingTaskFilamentColorProperties.clear();
+    }
+
+    this.assertTaskFilamentColorProperty(this.config.taskFilamentColorProperties.colorKey, "filament color lookup");
+  }
+
+  async ensureTaskFilamentColorTitleProperty() {
+    const titleName = this.config.taskFilamentColorProperties.title;
+    if (!titleName) return false;
+
+    const existing = this.taskFilamentColorSchema[titleName];
+    if (existing?.type === "title") return false;
+
+    let changed = false;
+    if (existing) {
+      const tempName = this.availableTaskFilamentColorTempPropertyName(titleName);
+      await this.renameTaskFilamentColorProperty(titleName, tempName);
+      this.logger.warn(
+        `Notion filament color property "${titleName}" has type "${existing.type}", expected "title"; renamed it to "${tempName}"`
+      );
+      await this.refreshTaskFilamentColorSchema();
+      changed = true;
+    }
+
+    const titleProperty = this.findTaskFilamentColorTitleProperty();
+    if (!titleProperty) throw new Error("Notion filament color database has no title property");
+
+    if (titleProperty.name !== titleName) {
+      await this.renameTaskFilamentColorProperty(titleProperty.name, titleName);
+      this.logger.info(`Renamed Notion filament color title property "${titleProperty.name}" to "${titleName}"`);
+      changed = true;
+    }
+
+    return changed;
+  }
+
+  async ensureTaskFilamentColorProperty(name, expectedSchema) {
+    if (!name) return false;
+
+    const existing = this.taskFilamentColorSchema[name];
+    if (!existing) {
+      await this.createTaskFilamentColorProperty(name, expectedSchema);
+      this.logger.info(`Created missing Notion filament color property "${name}" (${expectedSchema.type})`);
+      await this.refreshTaskFilamentColorSchema();
+      return true;
+    }
+
+    if (existing.type === expectedSchema.type) return false;
+
+    const tempName = this.availableTaskFilamentColorTempPropertyName(name);
+    await this.renameTaskFilamentColorProperty(name, tempName);
+    this.logger.warn(
+      `Notion filament color property "${name}" has type "${existing.type}", expected "${expectedSchema.type}"; renamed it to "${tempName}"`
+    );
+    await this.refreshTaskFilamentColorSchema();
+
+    await this.createTaskFilamentColorProperty(name, expectedSchema);
+    this.logger.info(`Created replacement Notion filament color property "${name}" (${expectedSchema.type})`);
+    await this.refreshTaskFilamentColorSchema();
+    return true;
+  }
+
+  availableTaskFilamentColorTempPropertyName(name) {
+    const names = new Set(Object.keys(this.taskFilamentColorSchema || {}));
+    const base = `${name}-temp`;
+    if (!names.has(base)) return base;
+
+    let index = 1;
+    while (names.has(`${base}-${index}`)) index += 1;
+    return `${base}-${index}`;
+  }
+
+  async renameTaskFilamentColorProperty(name, nextName) {
+    await this.client.dataSources.update({
+      data_source_id: this.taskFilamentColorDataSourceId,
+      properties: {
+        [name]: { name: nextName }
+      }
+    });
+  }
+
+  async createTaskFilamentColorProperty(name, schema) {
+    await this.client.dataSources.update({
+      data_source_id: this.taskFilamentColorDataSourceId,
       properties: {
         [name]: schema
       }
@@ -1258,6 +1472,7 @@ export class NotionAmsSync {
 
   async syncTrays(trays) {
     await this.ensureAmsSchema({ refresh: true });
+    await this.ensureTaskFilamentColorSchema();
 
     const seenAt = new Date();
     const uniqueTrays = uniqueByUid(trays);
@@ -1274,7 +1489,8 @@ export class NotionAmsSync {
 
   async syncTray(tray, seenAt) {
     const page = await this.findPageByUid(tray.uid);
-    const properties = this.buildTrayProperties(tray, seenAt);
+    const colorMapping = await this.upsertTaskFilamentColor(tray.color);
+    const properties = this.buildTrayProperties(tray, seenAt, colorMapping?.alias);
     const icon = swatchIcon(tray.color);
     const signature = JSON.stringify({ pageId: page?.id || null, properties, icon });
 
@@ -1314,7 +1530,7 @@ export class NotionAmsSync {
     return response.results[0] || null;
   }
 
-  buildTrayProperties(tray, seenAt) {
+  buildTrayProperties(tray, seenAt, colorAlias = "") {
     const props = this.config.properties;
     const entries = [
       this.valueFor(props.title, this.displayTitle(tray)),
@@ -1327,6 +1543,7 @@ export class NotionAmsSync {
       this.valueFor(props.printer, this.config.printerName),
       this.valueFor(props.material, tray.material),
       this.valueFor(props.color, tray.color),
+      this.valueFor(props.colorAlias, colorLabel(tray.color, colorAlias)),
       this.valueFor(props.tagUid, tray.tagUid),
       this.valueFor(props.trayUuid, tray.trayUuid),
       this.valueFor(props.trayWeight, tray.trayWeight)
@@ -1463,22 +1680,35 @@ export class NotionAmsSync {
     });
   }
 
-  async syncCloudPrintTasks(tasks) {
-    if (!this.taskDataSourceId || !Array.isArray(tasks) || tasks.length === 0) return;
+  async syncCloudPrintTasks(tasks, { onTaskSynced } = {}) {
+    if (!this.taskDataSourceId || !Array.isArray(tasks) || tasks.length === 0) return { synced: 0, lastTaskTime: "" };
 
     await this.ensureTaskSchema({ refresh: true });
-    this.logger.info(`Syncing ${tasks.length} Bambu cloud print task(s) into Notion`);
+    const records = tasks
+      .map((task) => this.printTaskRecordFromCloudTask(task))
+      .filter(Boolean)
+      .sort((a, b) => printTaskRecordHistoryTimeMs(a) - printTaskRecordHistoryTimeMs(b));
+    if (records.length === 0) return { synced: 0, lastTaskTime: "" };
 
+    this.logger.info(`Syncing ${records.length} Bambu cloud print task(s) into Notion`);
+
+    this.taskFilamentSpecPageCache.clear();
+    this.taskFilamentColorPageCache.clear();
     this.cloudTaskBatchMode = true;
+    let synced = 0;
+    let lastTaskTime = "";
     try {
-      for (const task of tasks) {
-        const record = this.printTaskRecordFromCloudTask(task);
-        if (!record) continue;
+      for (const record of records) {
         await this.upsertPrintTask(record);
+        synced += 1;
+        const recordTimeMs = printTaskRecordHistoryTimeMs(record);
+        if (recordTimeMs > 0) lastTaskTime = new Date(recordTimeMs).toISOString();
+        if (onTaskSynced) await onTaskSynced(record, { synced, lastTaskTime });
       }
     } finally {
       this.cloudTaskBatchMode = false;
     }
+    return { synced, lastTaskTime };
   }
 
   printTaskRecordFromCloudTask(task) {
@@ -1846,6 +2076,7 @@ export class NotionAmsSync {
 
     const refreshSchema = !this.cloudTaskBatchMode;
     await this.ensureTaskFilamentSchema({ refresh: refreshSchema });
+    await this.ensureTaskFilamentColorSchema({ refresh: refreshSchema });
     await this.ensureTaskFilamentSpecSchema({ refresh: refreshSchema });
 
     const ids = [];
@@ -1869,11 +2100,12 @@ export class NotionAmsSync {
 
     const specKey = this.filamentSpecKey(usage);
     const cached = this.taskFilamentSpecPageCache.get(specKey);
-    if (cached) return cached;
+    if (cached && this.cloudTaskBatchMode) return cached;
 
+    const colorMapping = await this.upsertTaskFilamentColor(usage.color);
     const pages = await this.findTaskFilamentSpecPagesByKey(specKey);
     const page = pages[0] || null;
-    const title = this.taskFilamentSpecTitle(usage);
+    const title = this.taskFilamentSpecTitle(usage, colorMapping?.alias);
     const properties = this.buildTaskFilamentSpecProperties(usage, specKey, title);
     const icon = swatchIcon(usage.color);
 
@@ -1899,6 +2131,204 @@ export class NotionAmsSync {
     });
     this.taskFilamentSpecPageCache.set(specKey, created);
     return created;
+  }
+
+  async upsertTaskFilamentColor(colorValue) {
+    const color = normalizeColor(colorValue);
+    if (!this.taskFilamentColorDataSourceId || !color) return null;
+
+    const cached = this.taskFilamentColorPageCache.get(color);
+    if (cached && this.cloudTaskBatchMode) return cached;
+
+    const pages = await this.findTaskFilamentColorPagesByKey(color);
+    const page = pages[0] || null;
+    const alias = page ? getPlainText(page.properties?.[this.config.taskFilamentColorProperties.alias]) : "";
+    const properties = this.buildTaskFilamentColorProperties(color);
+    const icon = swatchIcon(color);
+
+    if (this.config.dryRun) {
+      this.logger.info(`[dry-run] Would ${page ? "update" : "create"} Notion filament color "${color}"`);
+      return null;
+    }
+
+    if (page) {
+      await this.client.pages.update({
+        page_id: page.id,
+        properties,
+        ...(icon ? { icon } : {})
+      });
+      const result = { id: page.id, alias, color };
+      this.taskFilamentColorPageCache.set(color, result);
+      return result;
+    }
+
+    const created = await this.client.pages.create({
+      parent: { data_source_id: this.taskFilamentColorDataSourceId },
+      properties,
+      ...(icon ? { icon } : {})
+    });
+    const result = { id: created.id, alias: "", color };
+    this.taskFilamentColorPageCache.set(color, result);
+    return result;
+  }
+
+  async taskFilamentColorAliasMap() {
+    const aliases = new Map();
+    if (!this.taskFilamentColorDataSourceId) return aliases;
+
+    const props = this.config.taskFilamentColorProperties;
+    let startCursor;
+
+    do {
+      const response = await this.client.dataSources.query({
+        data_source_id: this.taskFilamentColorDataSourceId,
+        page_size: 100,
+        start_cursor: startCursor
+      });
+
+      for (const page of response.results || []) {
+        const properties = page.properties || {};
+        const color = normalizeColor(getPlainText(properties[props.colorKey]) || getPlainText(properties[props.title]));
+        if (!color) continue;
+
+        const alias = getPlainText(properties[props.alias]).trim();
+        aliases.set(color, alias);
+        this.taskFilamentColorPageCache.set(color, { id: page.id, alias, color });
+      }
+
+      startCursor = response.has_more ? response.next_cursor : undefined;
+    } while (startCursor);
+
+    return aliases;
+  }
+
+  async syncTaskFilamentSpecTitlesFromColorMappings() {
+    if (!this.taskFilamentSpecDataSourceId || !this.taskFilamentColorDataSourceId) return;
+
+    this.taskFilamentSpecPageCache.clear();
+    this.taskFilamentColorPageCache.clear();
+
+    const aliases = await this.taskFilamentColorAliasMap();
+    const props = this.config.taskFilamentSpecProperties;
+    let startCursor;
+    let scanned = 0;
+    let updated = 0;
+
+    do {
+      const response = await this.client.dataSources.query({
+        data_source_id: this.taskFilamentSpecDataSourceId,
+        page_size: 100,
+        start_cursor: startCursor
+      });
+
+      for (const page of response.results || []) {
+        scanned += 1;
+        const properties = page.properties || {};
+        const specKey = getPlainText(properties[props.specKey]);
+        const separator = specKey.indexOf(":");
+        const materialFromKey = separator >= 0 ? specKey.slice(0, separator) : "";
+        const colorFromKey = separator >= 0 ? specKey.slice(separator + 1) : "";
+        const material = getPlainText(properties[props.material]) || materialFromKey || "耗材";
+        const color = normalizeColor(getPlainText(properties[props.color]) || colorFromKey);
+        if (!color) continue;
+
+        if (!aliases.has(color)) {
+          const colorMapping = await this.upsertTaskFilamentColor(color);
+          aliases.set(color, colorMapping?.alias || "");
+        }
+
+        const title = this.taskFilamentSpecTitle({ material, color }, aliases.get(color));
+        const currentTitle = getPlainText(properties[props.title]);
+        if (currentTitle === title) continue;
+
+        const icon = swatchIcon(color);
+        const updateProperties = compactObject([
+          this.taskFilamentSpecValueFor(props.title, title),
+          this.taskFilamentSpecValueFor(props.material, material),
+          this.taskFilamentSpecValueFor(props.color, color),
+          this.taskFilamentSpecValueFor(props.lastSync, new Date())
+        ]);
+
+        if (this.config.dryRun) {
+          this.logger.info(`[dry-run] Would rename Notion filament spec "${currentTitle}" to "${title}"`);
+          continue;
+        }
+
+        await this.client.pages.update({
+          page_id: page.id,
+          properties: updateProperties,
+          ...(icon ? { icon } : {})
+        });
+        updated += 1;
+      }
+
+      startCursor = response.has_more ? response.next_cursor : undefined;
+    } while (startCursor);
+
+    if (updated > 0) {
+      this.logger.info(`Updated ${updated}/${scanned} Notion filament spec title(s) from color aliases`);
+    }
+  }
+
+  async syncAmsColorAliasesFromColorMappings() {
+    if (!this.config.dataSourceId || !this.taskFilamentColorDataSourceId) return;
+
+    const props = this.config.properties;
+    if (!props.color || !props.colorAlias) return;
+
+    this.taskFilamentColorPageCache.clear();
+    const aliases = await this.taskFilamentColorAliasMap();
+    let startCursor;
+    let scanned = 0;
+    let updated = 0;
+
+    do {
+      const response = await this.client.dataSources.query({
+        data_source_id: this.config.dataSourceId,
+        page_size: 100,
+        start_cursor: startCursor
+      });
+
+      for (const page of response.results || []) {
+        scanned += 1;
+        const properties = page.properties || {};
+        const color = normalizeColor(getPlainText(properties[props.color]));
+        if (!color) continue;
+
+        if (!aliases.has(color)) {
+          const colorMapping = await this.upsertTaskFilamentColor(color);
+          aliases.set(color, colorMapping?.alias || "");
+        }
+
+        const alias = colorLabel(color, aliases.get(color));
+        const currentAlias = getPlainText(properties[props.colorAlias]);
+        if (currentAlias === alias) continue;
+
+        const icon = swatchIcon(color);
+        const updateProperties = compactObject([
+          this.valueFor(props.colorAlias, alias),
+          this.valueFor(props.lastSync, new Date())
+        ]);
+
+        if (this.config.dryRun) {
+          this.logger.info(`[dry-run] Would update AMS color alias ${publicPageId(page.id)} to "${alias}"`);
+          continue;
+        }
+
+        await this.client.pages.update({
+          page_id: page.id,
+          properties: updateProperties,
+          ...(icon ? { icon } : {})
+        });
+        updated += 1;
+      }
+
+      startCursor = response.has_more ? response.next_cursor : undefined;
+    } while (startCursor);
+
+    if (updated > 0) {
+      this.logger.info(`Updated ${updated}/${scanned} AMS color alias(es) from color mappings`);
+    }
   }
 
   async upsertTaskFilamentUsage(record, taskPageId, usage, specPageId = "") {
@@ -1966,6 +2396,17 @@ export class NotionAmsSync {
     return response.results || [];
   }
 
+  async findTaskFilamentColorPagesByKey(colorKey) {
+    const propName = this.config.taskFilamentColorProperties.colorKey;
+    const propSchema = this.assertTaskFilamentColorProperty(propName, "filament color lookup");
+    const response = await this.client.dataSources.query({
+      data_source_id: this.taskFilamentColorDataSourceId,
+      filter: filterForExactValue(propName, propSchema, colorKey),
+      page_size: 100
+    });
+    return response.results || [];
+  }
+
   taskFilamentUsageTitle(usage) {
     return [
       usage.material || "耗材",
@@ -1977,8 +2418,11 @@ export class NotionAmsSync {
     return `${usage.material || "耗材"}:${usage.color || "unknown"}`;
   }
 
-  taskFilamentSpecTitle(usage) {
-    return usage.material || "耗材";
+  taskFilamentSpecTitle(usage, colorAlias = "") {
+    return [
+      usage.material || "耗材",
+      colorLabel(usage.color, colorAlias)
+    ].filter(Boolean).join(" · ");
   }
 
   buildTaskFilamentSpecProperties(usage, specKey, title) {
@@ -1989,6 +2433,15 @@ export class NotionAmsSync {
       this.taskFilamentSpecValueFor(props.material, usage.material),
       this.taskFilamentSpecValueFor(props.color, usage.color),
       this.taskFilamentSpecValueFor(props.lastSync, new Date())
+    ]);
+  }
+
+  buildTaskFilamentColorProperties(color) {
+    const props = this.config.taskFilamentColorProperties;
+    return compactObject([
+      this.taskFilamentColorValueFor(props.title, color),
+      this.taskFilamentColorValueFor(props.colorKey, color),
+      this.taskFilamentColorValueFor(props.lastSync, new Date())
     ]);
   }
 
@@ -2007,6 +2460,7 @@ export class NotionAmsSync {
       this.taskFilamentValueFor(props.weight, usage.weight),
       this.taskFilamentValueFor(props.percent, usage.percent),
       this.taskFilamentValueFor(props.startTime, record.startTime),
+      this.taskFilamentValueFor(props.status, record.status),
       this.taskFilamentValueFor(props.lastSync, new Date())
     ]);
   }
@@ -2256,6 +2710,8 @@ export class NotionAmsSync {
         return [property, { number: value == null || value === "" ? null : Number(value) }];
       case "date":
         return [property, { date: value ? { start: value instanceof Date ? value.toISOString() : String(value) } : null }];
+      case "select":
+        return [property, value ? { select: { name: String(value) } } : { select: null }];
       case "relation":
         return [property, { relation: uniq(value || []).map((id) => ({ id })) }];
       default:
@@ -2270,6 +2726,30 @@ export class NotionAmsSync {
       if (!this.warnedMissingTaskFilamentSpecProperties.has(propertyName)) {
         this.warnedMissingTaskFilamentSpecProperties.add(propertyName);
         this.logger.warn(`Notion filament spec property "${propertyName}" does not exist; ignoring it`);
+      }
+      return null;
+    }
+
+    const property = propId(propertyName, schema);
+    switch (schema.type) {
+      case "title":
+        return [property, { title: textContent(value) }];
+      case "rich_text":
+        return [property, { rich_text: textContent(value) }];
+      case "date":
+        return [property, { date: value ? { start: value instanceof Date ? value.toISOString() : String(value) } : null }];
+      default:
+        return null;
+    }
+  }
+
+  taskFilamentColorValueFor(propertyName, value) {
+    if (!propertyName || value === undefined) return null;
+    const schema = this.taskFilamentColorSchema[propertyName];
+    if (!schema) {
+      if (!this.warnedMissingTaskFilamentColorProperties.has(propertyName)) {
+        this.warnedMissingTaskFilamentColorProperties.add(propertyName);
+        this.logger.warn(`Notion filament color property "${propertyName}" does not exist; ignoring it`);
       }
       return null;
     }
@@ -2329,6 +2809,12 @@ export class NotionAmsSync {
     return schema;
   }
 
+  assertTaskFilamentColorProperty(propertyName, label) {
+    const schema = this.taskFilamentColorSchema?.[propertyName];
+    if (!schema) throw new Error(`Notion filament color property "${propertyName}" is required for ${label}`);
+    return schema;
+  }
+
   findTitleProperty() {
     const configured = this.config.properties.title;
     if (configured && this.schema[configured]?.type === "title") {
@@ -2370,6 +2856,17 @@ export class NotionAmsSync {
 
     const [name, schema] =
       Object.entries(this.taskFilamentSpecSchema).find(([, propertySchema]) => propertySchema.type === "title") || [];
+    return name ? { name, schema } : null;
+  }
+
+  findTaskFilamentColorTitleProperty() {
+    const configured = this.config.taskFilamentColorProperties.title;
+    if (configured && this.taskFilamentColorSchema[configured]?.type === "title") {
+      return { name: configured, schema: this.taskFilamentColorSchema[configured] };
+    }
+
+    const [name, schema] =
+      Object.entries(this.taskFilamentColorSchema).find(([, propertySchema]) => propertySchema.type === "title") || [];
     return name ? { name, schema } : null;
   }
 

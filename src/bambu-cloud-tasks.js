@@ -33,7 +33,18 @@ async function requestJson(url, accessToken) {
   return data;
 }
 
-export async function fetchCloudPrintTasks({ cloud, printerSerial, limit = 0, pageSize = 100, logger }) {
+export function cloudPrintTaskTimeMs(task) {
+  const candidates = [task?.endTime, task?.startTime, task?.createTime, task?.createdTime, task?.updateTime];
+  for (const value of candidates) {
+    if (value == null || value === "" || value === "0") continue;
+    const number = Number(value);
+    const millis = Number.isFinite(number) ? (number < 10_000_000_000 ? number * 1000 : number) : Date.parse(String(value));
+    if (Number.isFinite(millis)) return millis;
+  }
+  return 0;
+}
+
+export async function fetchCloudPrintTasks({ cloud, printerSerial, limit = 0, pageSize = 100, sinceTime = "", logger }) {
   if (!cloud?.accessToken) return [];
 
   const tasks = [];
@@ -41,6 +52,7 @@ export async function fetchCloudPrintTasks({ cloud, printerSerial, limit = 0, pa
   let offset = 0;
   let total = null;
   const safePageSize = Math.max(1, Math.min(Number(pageSize) || 100, 100));
+  const sinceMs = Number.isFinite(Date.parse(sinceTime)) ? Date.parse(sinceTime) : 0;
 
   do {
     const remaining = limit > 0 ? limit - tasks.length : safePageSize;
@@ -53,13 +65,23 @@ export async function fetchCloudPrintTasks({ cloud, printerSerial, limit = 0, pa
     const data = await requestJson(url, cloud.accessToken);
     const page = Array.isArray(data.hits) ? data.hits : [];
     total = Number.isFinite(Number(data.total)) ? Number(data.total) : tasks.length + page.length;
-    tasks.push(...page);
+    const newTasks = sinceMs > 0
+      ? page.filter((task) => {
+          const taskTimeMs = cloudPrintTaskTimeMs(task);
+          return taskTimeMs === 0 || taskTimeMs > sinceMs;
+        })
+      : page;
+    tasks.push(...newTasks);
     offset += page.length;
 
     if (logger && page.length > 0) {
       logger.info(`Fetched ${tasks.length}/${total} Bambu cloud print task(s)`);
     }
 
+    if (sinceMs > 0 && page.some((task) => {
+      const taskTimeMs = cloudPrintTaskTimeMs(task);
+      return taskTimeMs > 0 && taskTimeMs <= sinceMs;
+    })) break;
     if (page.length === 0) break;
     if (limit > 0 && tasks.length >= limit) break;
   } while (tasks.length < total);
