@@ -4,7 +4,19 @@ import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { NotionAmsSync } from "./notion-sync.js";
 
+function envEnabled(name) {
+  return ["1", "true", "yes", "y", "on"].includes(String(process.env[name] || "").toLowerCase());
+}
+
 async function main() {
+  const bootstrapLogger = createLogger(process.env.LOG_LEVEL || "info");
+  if (!envEnabled("AMS_SYNC_ENABLED") && !envEnabled("PRINT_TASK_HISTORY_SYNC_ON_START")) {
+    bootstrapLogger.info(
+      "No sync features enabled; set AMS_SYNC_ENABLED=true or PRINT_TASK_HISTORY_SYNC_ON_START=true to start syncing."
+    );
+    return;
+  }
+
   const rawConfig = loadConfig();
   const logger = createLogger(rawConfig.logLevel);
 
@@ -18,15 +30,21 @@ async function main() {
   logger.info(`Starting bambu-ams-notion-sync (${rawConfig.dryRun ? "dry-run" : "write mode"})`);
 
   const notionSync = new NotionAmsSync(notionConfig, logger);
-  await notionSync.init();
+  await notionSync.init({
+    enableAmsSync: rawConfig.notion.amsSyncEnabled,
+    enablePrintTaskSync: rawConfig.notion.printTaskHistorySyncOnStart
+  });
 
-  const bambuClient = new BambuMqttClient(
-    rawConfig.bambu,
-    logger,
-    (trays) => notionSync.syncTrays(trays),
-    (printState) => notionSync.syncPrinterStatus(printState)
-  );
-  bambuClient.start();
+  let bambuClient = null;
+  if (rawConfig.notion.amsSyncEnabled) {
+    bambuClient = new BambuMqttClient(
+      rawConfig.bambu,
+      logger,
+      (trays) => notionSync.syncTrays(trays),
+      rawConfig.notion.printTaskHistorySyncOnStart ? (printState) => notionSync.syncPrinterStatus(printState) : null
+    );
+    bambuClient.start();
+  }
 
   if (rawConfig.notion.printTaskHistorySyncOnStart && rawConfig.bambu.cloud?.accessToken) {
     fetchCloudPrintTasks({
@@ -42,7 +60,7 @@ async function main() {
 
   const shutdown = () => {
     logger.info("Shutting down...");
-    bambuClient.stop();
+    bambuClient?.stop();
     process.exit(0);
   };
 

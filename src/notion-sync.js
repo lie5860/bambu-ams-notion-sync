@@ -187,6 +187,8 @@ export class NotionAmsSync {
     this.cloudTaskBatchMode = false;
     this.taskFilamentSpecPageCache = new Map();
     this.taskFilamentColorPageCache = new Map();
+    this.amsSyncEnabled = true;
+    this.printTaskSyncEnabled = true;
   }
 
   installNotionRequestLimiter() {
@@ -206,20 +208,27 @@ export class NotionAmsSync {
     };
   }
 
-  async init({ deferMaintenance = false } = {}) {
+  async init({ deferMaintenance = false, enableAmsSync = true, enablePrintTaskSync = true } = {}) {
     if (!this.client.dataSources?.retrieve || !this.client.dataSources?.query || !this.client.dataSources?.update) {
       throw new Error("Installed @notionhq/client does not support dataSources. Run npm install with the bundled package.json.");
     }
 
-    const dataSource = await this.resolveDataSource(this.config.dataSourceId);
+    this.amsSyncEnabled = enableAmsSync;
+    this.printTaskSyncEnabled = enablePrintTaskSync;
+
+    const dataSource = await this.resolveDataSource(this.config.dataSourceId, {
+      createAmsDataSource: enableAmsSync
+    });
 
     this.schema = dataSource.properties || {};
-    await this.ensureAmsSchema();
-    await this.ensureTaskDataSource();
-    await this.ensureTaskFilamentColorDataSource();
-    await this.ensureTaskFilamentSpecDataSource();
-    await this.ensureTaskFilamentDataSource();
-    await this.ensureTaskSchema({ refresh: true });
+    if (enableAmsSync) await this.ensureAmsSchema();
+    if (enableAmsSync || enablePrintTaskSync) await this.ensureTaskFilamentColorDataSource();
+    if (enablePrintTaskSync) {
+      await this.ensureTaskDataSource();
+      await this.ensureTaskFilamentSpecDataSource();
+      await this.ensureTaskFilamentDataSource();
+      await this.ensureTaskSchema({ refresh: true });
+    }
     if (!deferMaintenance) await this.runStartupMaintenance();
     this.logger.info(
       `Loaded Notion data source ${this.config.dataSourceId} schema with ${Object.keys(this.schema).length} properties`
@@ -227,13 +236,15 @@ export class NotionAmsSync {
   }
 
   async runStartupMaintenance() {
-    await this.syncAmsColorAliasesFromColorMappings();
-    await this.syncTaskFilamentSpecTitlesFromColorMappings();
-    await this.ensureTaskFilamentCustomStatsViews();
-    await this.ensureTaskDefaultView();
+    if (this.amsSyncEnabled) await this.syncAmsColorAliasesFromColorMappings();
+    if (this.printTaskSyncEnabled) {
+      await this.syncTaskFilamentSpecTitlesFromColorMappings();
+      await this.ensureTaskFilamentCustomStatsViews();
+      await this.ensureTaskDefaultView();
+    }
   }
 
-  async resolveDataSource(id) {
+  async resolveDataSource(id, { createAmsDataSource = true } = {}) {
     try {
       const dataSource = await this.client.dataSources.retrieve({ data_source_id: id });
       await this.rememberParentPageFromDataSource(dataSource);
@@ -264,6 +275,11 @@ export class NotionAmsSync {
       throw new Error(
         `Cannot find Notion target ${id}. Share the page/database with your Notion integration, then restart the sync service.`
       );
+    }
+
+    if (!createAmsDataSource) {
+      this.logger.info(`Using Notion page ${id} as parent for enabled sync databases`);
+      return { id, properties: {} };
     }
 
     return this.ensureAmsDataSourceOnPage(id);
@@ -1471,6 +1487,8 @@ export class NotionAmsSync {
   }
 
   async syncTrays(trays) {
+    if (!this.amsSyncEnabled) return;
+
     await this.ensureAmsSchema({ refresh: true });
     await this.ensureTaskFilamentColorSchema();
 
@@ -1654,6 +1672,7 @@ export class NotionAmsSync {
   }
 
   async syncPrinterStatus(printState) {
+    if (!this.printTaskSyncEnabled) return;
     if (!this.taskDataSourceId) return;
 
     const record = this.printTaskRecordFromPrinterState(printState);
@@ -1681,6 +1700,7 @@ export class NotionAmsSync {
   }
 
   async syncCloudPrintTasks(tasks, { onTaskSynced } = {}) {
+    if (!this.printTaskSyncEnabled) return { synced: 0, lastTaskTime: "" };
     if (!this.taskDataSourceId || !Array.isArray(tasks) || tasks.length === 0) return { synced: 0, lastTaskTime: "" };
 
     await this.ensureTaskSchema({ refresh: true });

@@ -19,7 +19,8 @@ const DEFAULTS = {
   NOTION_COLOR_ALIAS_PROP: "颜色别名",
   NOTION_TITLE_PROP: "AMS 耗材",
   DRY_RUN: "true",
-  PRINT_TASK_HISTORY_SYNC_ON_START: "true",
+  AMS_SYNC_ENABLED: "false",
+  PRINT_TASK_HISTORY_SYNC_ON_START: "false",
   PRINT_TASK_HISTORY_LIMIT: "0",
   PRINT_TASK_HISTORY_MIN_INTERVAL_MS: "300000",
   PRINT_TASK_HISTORY_LAST_SYNC_AT: "",
@@ -38,8 +39,10 @@ export function configFilePath() {
 export async function loadStoredConfig() {
   const file = configFilePath();
   let saved = {};
+  let hasSavedConfig = false;
   try {
     saved = JSON.parse(await readFile(file, "utf8"));
+    hasSavedConfig = true;
   } catch {
     saved = {};
   }
@@ -49,6 +52,15 @@ export async function loadStoredConfig() {
     if (process.env[key] != null && process.env[key] !== "") {
       envConfig[key] = process.env[key];
     }
+  }
+
+  if (
+    hasSavedConfig &&
+    saved.AMS_SYNC_ENABLED == null &&
+    (saved.NOTION_TOKEN || envConfig.NOTION_TOKEN) &&
+    (saved.NOTION_DATA_SOURCE_ID || envConfig.NOTION_DATA_SOURCE_ID)
+  ) {
+    saved.AMS_SYNC_ENABLED = "true";
   }
 
   return { ...DEFAULTS, ...envConfig, ...saved };

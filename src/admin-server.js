@@ -55,6 +55,17 @@ async function removeIfExists(file) {
   }
 }
 
+function configEnabled(value) {
+  return ["1", "true", "yes", "y", "on"].includes(String(value || "").toLowerCase());
+}
+
+function syncFlagsFromStored(config) {
+  return {
+    ams: configEnabled(config.AMS_SYNC_ENABLED),
+    printHistory: configEnabled(config.PRINT_TASK_HISTORY_SYNC_ON_START)
+  };
+}
+
 class SyncRuntime {
   constructor() {
     this.logger = createLogger(process.env.LOG_LEVEL || "info");
@@ -71,11 +82,19 @@ class SyncRuntime {
     this.lastTaskHistorySyncAt = "";
     this.lastTaskHistoryCount = 0;
     this.lastTaskHistoryCheckpointAt = "";
+    this.enabledSyncs = { ams: false, printHistory: false };
   }
 
-  async restart() {
+  async restart({ forceTaskHistorySync = false } = {}) {
     await this.stop();
     const stored = await loadStoredConfig();
+    this.enabledSyncs = syncFlagsFromStored(stored);
+    if (!this.enabledSyncs.ams && !this.enabledSyncs.printHistory) {
+      this.lastError = "";
+      this.logger.info("All sync features are disabled; waiting for the user to enable AMS or print history sync");
+      return;
+    }
+
     this.starting = true;
     this.startupPhase = "加载配置";
     this.lastError = "";
@@ -92,21 +111,29 @@ class SyncRuntime {
       this.logger = createLogger(config.logLevel);
       this.notionSync = new NotionAmsSync(notionConfig, this.logger);
       this.startupPhase = "初始化 Notion";
-      await this.notionSync.init({ deferMaintenance: true });
+      await this.notionSync.init({
+        deferMaintenance: true,
+        enableAmsSync: config.notion.amsSyncEnabled,
+        enablePrintTaskSync: config.notion.printTaskHistorySyncOnStart
+      });
 
-      this.startupPhase = "连接打印机";
-      this.bambuClient = new BambuMqttClient(
-        config.bambu,
-        this.logger,
-        async (trays) => {
-          this.lastSyncAt = new Date().toISOString();
-          this.lastTrayCount = trays.length;
-          await this.notionSync.syncTrays(trays);
-        },
-        (printState) => this.notionSync.syncPrinterStatus(printState),
-        () => this.flushPendingManualSync()
-      );
-      this.bambuClient.start();
+      if (config.notion.amsSyncEnabled) {
+        this.startupPhase = "连接打印机";
+        this.bambuClient = new BambuMqttClient(
+          config.bambu,
+          this.logger,
+          async (trays) => {
+            this.lastSyncAt = new Date().toISOString();
+            this.lastTrayCount = trays.length;
+            await this.notionSync.syncTrays(trays);
+          },
+          config.notion.printTaskHistorySyncOnStart
+            ? (printState) => this.notionSync.syncPrinterStatus(printState)
+            : null,
+          () => this.flushPendingManualSync()
+        );
+        this.bambuClient.start();
+      }
       this.running = true;
       this.starting = false;
       this.startupPhase = "";
@@ -114,7 +141,7 @@ class SyncRuntime {
       this.runStartupMaintenance().catch((error) => {
         this.logger.error("Startup maintenance failed:", error.stack || error.message);
       });
-      this.syncPrintTaskHistory(config).catch((error) => {
+      this.syncPrintTaskHistory(config, { ignoreCooldown: forceTaskHistorySync }).catch((error) => {
         this.logger.error("Print task history sync failed:", error.stack || error.message);
       });
     } catch (error) {
@@ -167,9 +194,10 @@ class SyncRuntime {
     this.lastTaskHistorySyncAt = "";
     this.lastTaskHistoryCount = 0;
     this.lastTaskHistoryCheckpointAt = "";
+    this.enabledSyncs = { ams: false, printHistory: false };
   }
 
-  manualSync() {
+  async manualSync() {
     if (this.starting) {
       this.pendingManualSync = true;
       return {
@@ -178,17 +206,36 @@ class SyncRuntime {
         message: "同步服务正在启动，连接打印机后会自动执行这次同步。"
       };
     }
-    if (!this.bambuClient) throw new Error("Sync service is not running");
-    const ok = this.bambuClient.requestManualSync();
-    if (!ok) {
-      this.pendingManualSync = true;
-      return {
-        requested: false,
-        pending: true,
-        message: "同步服务已启动，正在等待拓竹云连接；连接后会自动执行这次同步。"
-      };
+
+    const stored = await loadStoredConfig();
+    const enabledSyncs = syncFlagsFromStored(stored);
+    if (!enabledSyncs.ams && !enabledSyncs.printHistory) {
+      throw new Error("请先打开至少一个同步开关");
     }
-    return { requested: true, message: "已请求打印机立即回报完整状态。" };
+
+    const messages = [];
+    let pending = false;
+    if (enabledSyncs.ams) {
+      if (!this.bambuClient) throw new Error("AMS 同步服务尚未运行");
+      const ok = this.bambuClient.requestManualSync();
+      if (!ok) {
+        this.pendingManualSync = true;
+        pending = true;
+        messages.push("AMS 同步正在等待拓竹云连接；连接后会自动执行这次同步。");
+      } else {
+        messages.push("已请求打印机立即回报完整 AMS 状态。");
+      }
+    }
+
+    if (enabledSyncs.printHistory) {
+      const config = loadConfig({ ...process.env, ...stored });
+      this.syncPrintTaskHistory(config, { ignoreCooldown: true }).catch((error) => {
+        this.logger.error("Manual print task history sync failed:", error.stack || error.message);
+      });
+      messages.push("已开始同步打印历史。");
+    }
+
+    return { requested: !pending, pending, message: messages.join(" ") };
   }
 
   status() {
@@ -204,11 +251,12 @@ class SyncRuntime {
       lastTaskHistorySyncAt: this.lastTaskHistorySyncAt,
       lastTaskHistoryCount: this.lastTaskHistoryCount,
       lastTaskHistoryCheckpointAt: this.lastTaskHistoryCheckpointAt,
+      enabledSyncs: this.enabledSyncs,
       bambu: this.bambuClient?.status() || null
     };
   }
 
-  async syncPrintTaskHistory(config) {
+  async syncPrintTaskHistory(config, { ignoreCooldown = false } = {}) {
     if (!config.notion.printTaskHistorySyncOnStart || !config.bambu.cloud?.accessToken || !this.notionSync) return;
 
     const stored = await loadStoredConfig();
@@ -216,7 +264,7 @@ class SyncRuntime {
     this.lastTaskHistoryCheckpointAt = stored.PRINT_TASK_HISTORY_LAST_TASK_TIME || "";
     const lastStartedAt = Date.parse(stored.PRINT_TASK_HISTORY_LAST_SYNC_AT || "");
     const minIntervalMs = Math.max(0, config.notion.printTaskHistoryMinIntervalMs || 0);
-    if (minIntervalMs > 0 && Number.isFinite(lastStartedAt) && now - lastStartedAt < minIntervalMs) {
+    if (!ignoreCooldown && minIntervalMs > 0 && Number.isFinite(lastStartedAt) && now - lastStartedAt < minIntervalMs) {
       const nextAt = new Date(lastStartedAt + minIntervalMs).toISOString();
       this.lastTaskHistorySyncAt = stored.PRINT_TASK_HISTORY_LAST_SYNC_AT || this.lastTaskHistorySyncAt;
       this.logger.info(`Skipping print task history sync; next allowed at ${nextAt}`);
@@ -296,6 +344,16 @@ function page() {
     .panelBody { display:none; gap:16px; padding:18px 22px 22px; border-top:1px solid var(--line); }
     .panel.open .panelBody { display:grid; }
     .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .switches { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .switch { display:grid; grid-template-columns:1fr auto auto; gap:12px; align-items:center; border:1px solid var(--line); border-radius:6px; padding:12px; background:#fff; }
+    .switchCopy { display:grid; gap:3px; min-width:0; }
+    .switchCopy strong { color:#263445; font-size:13px; }
+    .switchCopy small { color:var(--muted); font-size:12px; line-height:1.35; }
+    .switch input { position:absolute; opacity:0; pointer-events:none; }
+    .switchKnob { width:42px; height:24px; border-radius:999px; background:#d7dee8; position:relative; transition:background .16s ease; }
+    .switchKnob::after { content:""; position:absolute; width:18px; height:18px; border-radius:999px; background:#fff; top:3px; left:3px; box-shadow:0 1px 3px rgba(18,29,45,.18); transition:transform .16s ease; }
+    .switch input:checked + .switchKnob { background:var(--accent); }
+    .switch input:checked + .switchKnob::after { transform:translateX(18px); }
     label { display:grid; gap:6px; font-size:13px; color:#344054; }
     input, select { height:40px; border:1px solid var(--line); border-radius:6px; padding:0 11px; font:inherit; color:var(--text); background:#fff; min-width:0; }
     input:focus, select:focus { outline:2px solid rgba(11,107,203,.18); border-color:var(--accent); }
@@ -331,7 +389,7 @@ function page() {
     .subtle { color:var(--muted); font-size:13px; }
     code { font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     [hidden] { display:none !important; }
-    @media (max-width:720px){ .grid{grid-template-columns:1fr;} .panelHeader{grid-template-columns:auto 1fr auto;} .pill{grid-column:2 / 4; justify-self:start;} .progressHead{display:grid;} .progressMeta{text-align:left; max-width:100%; justify-self:start;} }
+    @media (max-width:720px){ .grid,.switches{grid-template-columns:1fr;} .panelHeader{grid-template-columns:auto 1fr auto;} .pill{grid-column:2 / 4; justify-self:start;} .progressHead{display:grid;} .progressMeta{text-align:left; max-width:100%; justify-self:start;} }
   </style>
 </head>
 <body>
@@ -475,6 +533,24 @@ function page() {
         </div>
         <div id="status" class="status">加载中...</div>
         <form id="syncForm">
+          <div class="switches">
+            <label class="switch">
+              <span class="switchCopy">
+                <strong>AMS 数据</strong>
+                <small>当前料盘、RFID、余量和颜色</small>
+              </span>
+              <input name="AMS_SYNC_ENABLED" type="checkbox" value="true">
+              <span class="switchKnob" aria-hidden="true"></span>
+            </label>
+            <label class="switch">
+              <span class="switchCopy">
+                <strong>打印历史</strong>
+                <small>Bambu Cloud 已完成任务记录</small>
+              </span>
+              <input name="PRINT_TASK_HISTORY_SYNC_ON_START" type="checkbox" value="true">
+              <span class="switchKnob" aria-hidden="true"></span>
+            </label>
+          </div>
           <div class="grid">
             <label>同步周期（毫秒，10 分钟 = 600000）
               <input name="PUSHALL_INTERVAL_MS" inputmode="numeric" placeholder="600000">
@@ -533,13 +609,19 @@ function page() {
     }
 
     function formValues(form) {
-      return Object.fromEntries(new FormData(form).entries());
+      const values = Object.fromEntries(new FormData(form).entries());
+      for (const input of form.querySelectorAll('input[type="checkbox"][name]')) {
+        values[input.name] = input.checked ? "true" : "false";
+      }
+      return values;
     }
 
     function setFormValues(form, config) {
       for (const [key, value] of Object.entries(config || {})) {
         const input = form.elements[key];
-        if (input) input.value = value;
+        if (!input) continue;
+        if (input.type === "checkbox") input.checked = value === true || value === "true";
+        else input.value = value;
       }
     }
 
@@ -583,16 +665,37 @@ function page() {
       }
     }
 
-    function runtimeText(runtime) {
+    function enabledText(value) {
+      return value ? "开启" : "关闭";
+    }
+
+    function runtimeText(runtime, config = {}) {
       if (!runtime) return "同步服务未启动";
+      const flags = runtime.enabledSyncs || {
+        ams: config.AMS_SYNC_ENABLED === "true",
+        printHistory: config.PRINT_TASK_HISTORY_SYNC_ON_START === "true"
+      };
       const lines = [
         "服务: " + (runtime.starting ? "启动中" : runtime.running ? "运行中" : "未启动"),
-        "拓竹云连接: " + (runtime.bambu?.connected ? "已连接" : "未连接"),
-        "最近同步: " + (runtime.lastSyncAt ? new Date(runtime.lastSyncAt).toLocaleString() : "-"),
-        "最近耗材数: " + (runtime.lastTrayCount ?? 0),
-        "任务历史: " + (runtime.lastTaskHistorySyncAt ? (runtime.lastTaskHistoryCount ?? 0) + " 条 · " + new Date(runtime.lastTaskHistorySyncAt).toLocaleString() : "同步中/未同步"),
-        "历史同步到: " + (runtime.lastTaskHistoryCheckpointAt ? new Date(runtime.lastTaskHistoryCheckpointAt).toLocaleString() : "-")
+        "同步开关: AMS " + enabledText(flags.ams) + " · 打印历史 " + enabledText(flags.printHistory)
       ];
+      if (flags.ams) {
+        lines.push(
+          "拓竹云连接: " + (runtime.bambu?.connected ? "已连接" : "未连接"),
+          "最近 AMS 同步: " + (runtime.lastSyncAt ? new Date(runtime.lastSyncAt).toLocaleString() : "-"),
+          "最近耗材数: " + (runtime.lastTrayCount ?? 0)
+        );
+      } else {
+        lines.push("AMS 同步: 未开启");
+      }
+      if (flags.printHistory) {
+        lines.push(
+          "任务历史: " + (runtime.lastTaskHistorySyncAt ? (runtime.lastTaskHistoryCount ?? 0) + " 条 · " + new Date(runtime.lastTaskHistorySyncAt).toLocaleString() : "同步中/未同步"),
+          "历史同步到: " + (runtime.lastTaskHistoryCheckpointAt ? new Date(runtime.lastTaskHistoryCheckpointAt).toLocaleString() : "-")
+        );
+      } else {
+        lines.push("任务历史: 未开启");
+      }
       if (runtime.startupPhase) lines.splice(1, 0, "启动阶段: " + runtime.startupPhase);
       if (runtime.maintenanceRunning) lines.push("后台维护: 运行中");
       if (runtime.pendingManualSync) lines.push("立即同步: 等待连接后执行");
@@ -609,6 +712,18 @@ function page() {
     }
 
     function startupProgressState(runtime) {
+      const flags = runtime?.enabledSyncs || { ams: false, printHistory: false };
+      if (!flags.ams && !flags.printHistory) {
+        return {
+          title: "等待选择同步内容",
+          meta: "AMS 和打印历史均未开启",
+          percent: 0,
+          activeIndex: 0,
+          doneUntil: -1,
+          kind: "warn"
+        };
+      }
+
       if (runtime?.starting) {
         const phase = runtime.startupPhase || "启动中";
         const activeIndex = phase === "初始化 Notion" ? 1 : phase === "连接打印机" ? 2 : 0;
@@ -787,14 +902,23 @@ function page() {
     function renderSync(data) {
       const runtime = data.runtime || {};
       const config = data.config || {};
+      const flags = runtime.enabledSyncs || {
+        ams: config.AMS_SYNC_ENABLED === "true",
+        printHistory: config.PRINT_TASK_HISTORY_SYNC_ON_START === "true"
+      };
       setFormValues(syncForm, config);
       renderStartupProgress(runtime);
-      setStatus(runtimeText(runtime), statusKind(runtime));
+      setStatus(runtimeText(runtime, config), statusKind(runtime));
       if (runtime.starting) {
         document.querySelector("#syncSummary").textContent = "启动中 · " + (runtime.startupPhase || "初始化");
         setPill("syncPill", "启动中", "warn");
+      } else if (!flags.ams && !flags.printHistory) {
+        document.querySelector("#syncSummary").textContent = "请选择要同步的数据";
+        setPill("syncPill", "未启用", "warn");
       } else if (runtime.running) {
-        document.querySelector("#syncSummary").textContent = "运行中 · " + (runtime.bambu?.connected ? "拓竹云已连接" : "等待连接拓竹云");
+        document.querySelector("#syncSummary").textContent = flags.ams
+          ? "运行中 · " + (runtime.bambu?.connected ? "拓竹云已连接" : "等待连接拓竹云")
+          : "运行中 · 打印历史已开启";
         setPill("syncPill", "运行中", "ok");
       } else if (runtime.lastError) {
         document.querySelector("#syncSummary").textContent = runtime.lastError;
@@ -855,9 +979,9 @@ function page() {
 
     document.querySelector("#manualSync").addEventListener("click", async () => {
       try {
-        setStatus("已请求立即同步，等待打印机状态回报...", "warn");
+        setStatus("已请求立即同步...", "warn");
         const result = await api("/api/sync", {});
-        setStatus(result.message || "已请求立即同步，等待打印机状态回报...", result.pending ? "warn" : "ok");
+        setStatus(result.message || "已请求立即同步。", result.pending ? "warn" : "ok");
         setTimeout(refresh, 1500);
       } catch (error) {
         setStatus(error.message, "bad");
@@ -1041,7 +1165,11 @@ async function handleApi(req, res, pathname) {
       const existing = await loadStoredConfig();
       const next = mergeConfig(existing, body);
       await saveStoredConfig(next);
-      await runtime.restart();
+      await runtime.restart({
+        forceTaskHistorySync:
+          !configEnabled(existing.PRINT_TASK_HISTORY_SYNC_ON_START) &&
+          configEnabled(next.PRINT_TASK_HISTORY_SYNC_ON_START)
+      });
       sendJson(res, 200, { ok: true, runtime: runtime.status() });
       return;
     }
@@ -1053,7 +1181,7 @@ async function handleApi(req, res, pathname) {
     }
 
     if (pathname === "/api/sync" && req.method === "POST") {
-      sendJson(res, 200, runtime.manualSync());
+      sendJson(res, 200, await runtime.manualSync());
       return;
     }
 

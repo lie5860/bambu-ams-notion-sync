@@ -191,7 +191,9 @@ AMS 耗材
 - MQTT 实时状态：任务开始/暂停/失败/结束、进度、层数、当前 AMS 槽位。
 - Bambu Cloud 任务历史：任务名称、打印配置、开始/结束时间、耗材总重量、耗材长度、封面、完成截图。
 
-MQTT 是实时触发源。Bambu Cloud 任务历史是补全和校准源。
+同步功能按开关独立启用。新安装默认不启用任何同步；用户可以只打开 `AMS 数据`，也可以只打开 `打印历史`。
+
+MQTT 是 AMS 数据的实时触发源。Bambu Cloud 任务历史是打印历史的补全和校准源。
 
 ### 启动同步
 
@@ -200,14 +202,15 @@ MQTT 是实时触发源。Bambu Cloud 任务历史是补全和校准源。
 - 前台启动：读取配置、修复 AMS/打印记录/耗材用量明细/耗材色卡/颜色映射等必要 schema，然后立即连接打印机 MQTT。Web 控制台在这一阶段显示启动步骤条、`启动中` 和当前启动阶段。
 - 后台维护：连接打印机后再刷新颜色别名、修复默认视图和统计视图等慢操作。后台维护不阻塞服务进入 `运行中`，也不阻塞打印机连接。
 
-如果用户在前台启动或 MQTT 尚未连接时点击“立即同步”，Web 控制台只返回等待提示并记录一次 pending manual sync；连接建立并订阅成功后，服务会补发 `pushall` 请求。
+如果用户在前台启动或 MQTT 尚未连接时点击“立即同步”，Web 控制台只返回等待提示并记录一次 pending manual sync；连接建立并订阅成功后，服务会补发 `pushall` 请求。未打开 `AMS 数据` 时不会连接 MQTT；只打开 `打印历史` 时，“立即同步”会触发一次云端历史拉取。
 
-服务第一次启动时默认会分页拉取当前打印机的完整云端任务历史，而不是只拉最近几条。历史任务按任务时间从旧到新写入；每成功写入一条，就把该任务时间记录为 checkpoint。
+`打印历史` 开关第一次打开时会分页拉取当前打印机的完整云端任务历史，而不是只拉最近几条。历史任务按任务时间从旧到新写入；每成功写入一条，就把该任务时间记录为 checkpoint。
 
 配置项：
 
 ```text
-PRINT_TASK_HISTORY_SYNC_ON_START=true
+AMS_SYNC_ENABLED=false
+PRINT_TASK_HISTORY_SYNC_ON_START=false
 PRINT_TASK_HISTORY_LIMIT=0
 PRINT_TASK_HISTORY_PAGE_SIZE=100
 PRINT_TASK_HISTORY_MIN_INTERVAL_MS=300000
