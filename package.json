@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Sync Bambu Lab AMS filament RFID/remaining data into an existing Notion table.",
   "scripts": {
+    "dev": "ADMIN_UI_RELOAD=1 node src/admin-server.js",
     "start": "node src/admin-server.js",
     "sync:start": "node src/index.js",
     "cloud:login": "node src/cloud-login-server.js",

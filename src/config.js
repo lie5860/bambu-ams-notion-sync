@@ -2,18 +2,10 @@ import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-function required(name) {
-  return requiredFrom(process.env, name);
-}
-
 function requiredFrom(source, name) {
   const value = source[name]?.trim();
   if (!value) throw new Error(`Missing required env: ${name}`);
   return value;
-}
-
-function optional(name, fallback = "") {
-  return optionalFrom(process.env, name, fallback);
 }
 
 function optionalFrom(source, name, fallback = "") {
@@ -21,18 +13,10 @@ function optionalFrom(source, name, fallback = "") {
   return value == null || value === "" ? fallback : value.trim();
 }
 
-function bool(name, fallback = false) {
-  return boolFrom(process.env, name, fallback);
-}
-
 function boolFrom(source, name, fallback = false) {
   const value = source[name];
   if (value == null || value === "") return fallback;
   return ["1", "true", "yes", "y", "on"].includes(value.toLowerCase());
-}
-
-function int(name, fallback) {
-  return intFrom(process.env, name, fallback);
 }
 
 function intFrom(source, name, fallback) {
@@ -43,19 +27,11 @@ function intFrom(source, name, fallback) {
   return parsed;
 }
 
-function csv(name, fallback) {
-  return csvFrom(process.env, name, fallback);
-}
-
 function csvFrom(source, name, fallback) {
   return optionalFrom(source, name, fallback)
     .split(",")
     .map((part) => part.trim())
     .filter(Boolean);
-}
-
-function notionId(name) {
-  return notionIdFrom(process.env, name);
 }
 
 function notionIdFrom(source, name) {
@@ -158,6 +134,7 @@ export function loadConfig(source = process.env) {
         filamentUsages: optionalFrom(source, "NOTION_TASK_FILAMENT_USAGES_PROP", "耗材用量"),
         thumbnail: optionalFrom(source, "NOTION_TASK_THUMBNAIL_PROP", "任务缩略图"),
         snapshot: optionalFrom(source, "NOTION_TASK_SNAPSHOT_PROP", "完成截图"),
+        displayImage: optionalFrom(source, "NOTION_TASK_DISPLAY_IMAGE_PROP", "展示图片"),
         rawCoverUrl: optionalFrom(source, "NOTION_TASK_RAW_COVER_URL_PROP", "原始封面URL"),
         rawSnapshotUrl: optionalFrom(source, "NOTION_TASK_RAW_SNAPSHOT_URL_PROP", "原始截图URL"),
         lastSync: optionalFrom(source, "NOTION_TASK_LAST_SYNC_PROP", "最后同步时间")

@@ -46,21 +46,25 @@ AMS 2 -> C0/C1/C2/C3
 
 如果配置的是 database id，服务会解析该 database 的第一个 data source 后使用。
 
-如果配置的是父页面 id，服务会在该页面下查找子数据库。子数据库匹配规则保持简单透明：
+如果配置的是父页面 id，服务会在该页面下查找一组托管子数据库。子数据库匹配规则保持简单透明：
 
 ```text
-child_database.title === NOTION_AMS_DATABASE_NAME
+child_database.title === configured managed database name
 ```
 
 默认数据库名为：
 
 ```text
 AMS 耗材
+打印记录
+耗材用量明细
+耗材色卡
+颜色映射
 ```
 
-如果父页面下不存在同名子数据库，服务会创建一个新的 AMS 子数据库。
+如果父页面下不存在同名子数据库，服务会创建一个新的托管子数据库。
 
-这里刻意不保存子数据库的稳定 id。用户如果重命名子数据库，服务会视为原数据库不存在，并在父页面下新建一个配置名称对应的数据库。这是预期行为。
+这里刻意不保存子数据库的稳定 id。用户如果重命名子数据库，服务会视为原数据库不存在，并在父页面下新建一个配置名称对应的数据库。这是预期行为。Web 控制台默认隐藏数据库名配置，并在保存 Notion 配置时回写默认托管数据库名，避免普通用户误改后产生重复库；高级部署仍可通过环境变量覆盖这些名称。
 
 ## Notion 字段管理
 
@@ -143,22 +147,46 @@ AMS 耗材
 
 ## 同步流程
 
-推荐同步流程如下：
+当前 Docker 入口是 Web 管理进程 `src/admin-server.js`。运行时先完成 Notion 目标解析和 schema 修复，再按开关启动对应同步通道：
 
 ```text
 启动服务
-  -> 连接 Bambu MQTT
   -> 解析 Notion 目标
-  -> 找到或创建 AMS 子数据库
+  -> 找到或创建 AMS / 打印记录 / 耗材用量 / 耗材色卡 / 颜色映射子数据库
   -> 执行 schema repair
-  -> 订阅打印机状态
-  -> 收到 AMS snapshot
-  -> 去重 RFID
-  -> 查询 Notion 行
-  -> 更新或创建耗材页面
+  -> 如启用 AMS，同步启动 Bambu MQTT 并订阅打印机上报
+  -> 后台执行启动维护
+     -> 刷新颜色别名
+     -> 修复默认视图和统计视图
+     -> 回填历史打印记录的展示图片
+  -> 如启用打印历史，后台执行云端历史增量同步并启动周期同步
 ```
 
 其中 schema repair 是写入前置条件。服务只有在确认托管字段完整且类型正确后，才应该执行页面写入。
+
+AMS 数据流：
+
+```text
+Bambu MQTT report
+  -> 合并增量 print payload
+  -> 只在出现 print.ams.ams 时解析 AMS 槽位
+  -> 生成稳定 snapshot 签名
+  -> 签名未变化则跳过
+  -> debounce 后写入 Notion
+```
+
+打印记录数据流：
+
+```text
+MQTT 实时状态
+  -> 节流 / 合并进行中的写入
+  -> 更新当前任务进度和槽位
+
+Bambu Cloud 历史
+  -> 按 checkpoint 拉增量任务
+  -> 按任务时间从旧到新写入
+  -> 每成功写入一条就推进 checkpoint
+```
 
 ## 设计边界
 
@@ -219,9 +247,26 @@ PRINT_TASK_HISTORY_LAST_TASK_TIME=
 
 `PRINT_TASK_HISTORY_LIMIT=0` 表示不限制数量，按接口返回的 total 拉到最旧一条。
 
-后续启动时，服务会使用 `PRINT_TASK_HISTORY_LAST_TASK_TIME` 作为增量同步边界，只同步这个时间之后的新任务。为避免 Web 控制台保存配置、重启服务时反复触发历史同步，启动历史同步还有 5 分钟默认冷却时间。冷却时间和 checkpoint 都会写入本地配置文件。
+后续启动时，服务会使用 `PRINT_TASK_HISTORY_LAST_TASK_TIME` 作为增量同步边界，并额外回看 checkpoint 前 48 小时内的任务做覆盖检查。覆盖窗口里的任务如果和 Notion 现有任务及耗材明细完全一致，会跳过 Notion 写入；如果云端补齐了截图、耗材或状态，则会正常更新。为避免 Web 控制台保存配置、重启服务时反复触发历史同步，启动历史同步还有 5 分钟默认冷却时间。冷却时间和 checkpoint 都会写入本地配置文件。
 
 Web 控制台提供“清空任务历史时间”按钮，会同时清空 checkpoint 和冷却触发时间。用户点击后，下次保存配置或重启服务触发历史同步时，会重新从最早任务开始全量同步。
+
+Web 控制台运行状态里的“历史”数字显示 Notion `打印记录` 库当前可见任务总数，不再显示本次同步处理条数。
+
+### 同步频率和性能边界
+
+- AMS 同步由 MQTT `pushall` 和设备主动上报触发。服务只在上报里包含 AMS 槽位数据时解析 AMS，并用稳定签名跳过无变化快照。
+- AMS 写入有 debounce 和 in-flight 收敛：Notion 写入尚未完成时，只保留最新一份 AMS 快照。
+- 打印历史同步在启动、手动同步、定时器触发时运行。`PRINT_TASK_HISTORY_MIN_INTERVAL_MS` 同时作为冷却时间和周期同步间隔，最低 60 秒。
+- 打印历史同步有单实例 in-flight 保护；上一次未结束时，后续触发会跳过。
+- 打印历史使用 `PRINT_TASK_HISTORY_LAST_TASK_TIME` 做增量边界，并在边界前保留 48 小时覆盖窗口；默认 5 分钟周期下，通常只查询最新一页。
+- Notion 请求全局按最小 1 秒间隔串行执行，避免触发 API 限流。
+- 图片只在缺失、签名源变化或需要补 `展示图片` 时处理。历史 `展示图片` 回填直接复用已有 Notion 文件引用，不重新拉取 Bambu 历史，也不重新上传图片。
+- MQTT 实时任务状态按状态变化、进度步长、槽位变化和最长间隔写入；并发写入同一个任务时会合并到最新状态。
+
+### 日志关注点
+
+默认 `LOG_LEVEL=info` 会记录启动目标解析、schema 修复、视图修复、AMS 快照写入、打印历史拉取数量、历史同步结果和 checkpoint。排查高频同步时可以临时设为 `debug`，观察 AMS 快照跳过、实时任务写入合并等低噪声细节。
 
 ### 实时更新策略
 
@@ -259,7 +304,7 @@ bambu:<printerSerial>:task:<taskId>
 bambu:22E8BJ5C2801961:task:203344493
 ```
 
-如果没有 `taskId`，则依次使用 `subtaskId`、`projectId + profileId`、`gcode_file + gcode_start_time` 生成 fallback key。
+如果没有有效 `taskId`，则依次使用 `subtaskId`、`projectId + profileId`、`gcode_file + gcode_start_time` 生成 fallback key。Bambu MQTT 中的 `0` 或全 0 值视为占位值，不会生成 `task:0` 主键。
 
 Notion 不提供唯一索引，所以该主键不能提供强事务锁。但多实例并行时，只要看到同一个任务 key，就会更新同一行。
 
@@ -337,7 +382,8 @@ Notion 原生 chart 不支持用 relation 页面的 icon 或自定义 hex 给柱
 服务会把 `打印记录` 数据库的 Notion 自动视图 `Default view` 配置为 gallery：
 
 - 排序：`开始时间` 降序。
-- 卡片预览：使用 `完成截图` 文件属性。
+- 过滤：隐藏 `同步状态 = 重复` 的旧重复页。
+- 卡片预览：使用 `展示图片` 文件属性。
 - 卡片大小：small。
 - 卡片属性：只显示 `打印任务`、`状态`、`耗材用量`。
 - 可见属性开启换行显示。
@@ -352,7 +398,9 @@ Bambu Cloud 任务历史中的 `cover` 是任务/模型缩略图，`snapShot` �
 
 - `任务缩略图`：来自 `cover`。
 - `完成截图`：来自 `snapShot`。
-- 页面 cover：优先使用 `snapShot`，没有则使用 `cover`。
-- 失败任务如果没有 `snapShot`，会复用 `cover` 作为 `完成截图` 和页面 cover。
+- `展示图片`：优先使用 `完成截图`，没有则使用 `任务缩略图`。
+- 页面 cover：跟随 `展示图片`。
+
+启动维护会对历史打印记录做一次轻量回填：只处理 `展示图片` 为空且不是重复页的记录，直接复用已有 `完成截图` 或 `任务缩略图` 文件，不重新拉取历史任务。
 
 如果上传失败，服务会临时回退到外链文件，但后续同步发现该字段仍不是 Notion 文件时，会再次尝试上传。

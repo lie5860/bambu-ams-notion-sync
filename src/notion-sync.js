@@ -122,6 +122,33 @@ function getRelationIds(propertyValue) {
   return Array.isArray(propertyValue?.relation) ? propertyValue.relation.map((item) => item.id).filter(Boolean) : [];
 }
 
+function textPayloadValue(parts) {
+  return (parts || []).map((part) => part.plain_text ?? part.text?.content ?? "").join("");
+}
+
+function sameStringSet(left, right) {
+  const leftValues = uniq(left).sort();
+  const rightValues = uniq(right).sort();
+  return leftValues.length === rightValues.length && leftValues.every((value, index) => value === rightValues[index]);
+}
+
+function sameDateValue(left, right) {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+  if (Number.isFinite(leftMs) && Number.isFinite(rightMs)) return leftMs === rightMs;
+  return String(left) === String(right);
+}
+
+function fileSignature(file) {
+  const name = file?.name || "";
+  if (file?.type === "file_upload") return `${name}:upload:${file.file_upload?.id || ""}`;
+  if (file?.type === "external") return `${name}:external:${stableMediaSource(file.external?.url || "")}`;
+  if (file?.type === "file") return `${name}:file:${stableMediaSource(file.file?.url || "")}`;
+  return `${name}:${file?.type || ""}`;
+}
+
 function slotLabel(amsId, slotId) {
   const amsIndex = Number.parseInt(amsId, 10);
   const slotIndex = Number.parseInt(slotId, 10);
@@ -244,6 +271,7 @@ export class NotionAmsSync {
       await this.syncTaskFilamentSpecTitlesFromColorMappings();
       await this.ensureTaskFilamentCustomStatsViews();
       await this.ensureTaskDefaultView();
+      await this.backfillTaskDisplayImages();
     }
   }
 
@@ -583,6 +611,7 @@ export class NotionAmsSync {
     }
     add(props.thumbnail, { type: "files", files: {} });
     add(props.snapshot, { type: "files", files: {} });
+    add(props.displayImage, { type: "files", files: {} });
     add(props.rawCoverUrl, { type: "url", url: {} });
     add(props.rawSnapshotUrl, { type: "url", url: {} });
     add(props.lastSync, { type: "date", date: {} });
@@ -824,10 +853,12 @@ export class NotionAmsSync {
     }
 
     const viewName = "Default view";
+    const filter = this.taskGalleryViewFilter();
     const request = {
       name: viewName,
       type: "gallery",
       sorts: this.taskGalleryViewSorts(),
+      ...(filter ? { filter } : {}),
       configuration: this.taskGalleryViewConfiguration()
     };
     if (!request.configuration) return;
@@ -875,8 +906,19 @@ export class NotionAmsSync {
     return [{ property: startTime.id || this.config.taskProperties.startTime, direction: "descending" }];
   }
 
+  taskGalleryViewFilter() {
+    const propName = this.config.taskProperties.syncStatus;
+    const syncStatus = this.taskSchema?.[propName];
+    if (!syncStatus) return null;
+    return {
+      property: propId(propName, syncStatus),
+      select: { does_not_equal: "重复" }
+    };
+  }
+
   taskGalleryViewConfiguration() {
     const props = this.config.taskProperties;
+    const displayImage = this.taskSchema?.[props.displayImage];
     const snapshot = this.taskSchema?.[props.snapshot];
     const visiblePropertyNames = [props.title, props.status, props.filamentUsages].filter(Boolean);
     const propertyNames = uniq([
@@ -899,7 +941,9 @@ export class NotionAmsSync {
     return {
       type: "gallery",
       properties,
-      cover: snapshot ? { type: "property", property_id: propId(props.snapshot, snapshot) } : { type: "page_cover" },
+      cover: displayImage
+        ? { type: "property", property_id: propId(props.displayImage, displayImage) }
+        : snapshot ? { type: "property", property_id: propId(props.snapshot, snapshot) } : { type: "page_cover" },
       cover_size: "small",
       cover_aspect: "cover",
       card_layout: "list"
@@ -1795,34 +1839,69 @@ export class NotionAmsSync {
     const previous = this.activeTasks.get(record.taskKey);
     const merged = this.mergeTaskRecords(previous?.record, record);
     const shouldWrite = this.shouldWritePrintTask(previous, merged);
-    this.activeTasks.set(record.taskKey, {
+    const state = {
       record: merged,
       lastProgress: previous?.lastProgress ?? null,
       lastWriteAt: previous?.lastWriteAt || 0,
-      lastStatus: previous?.lastStatus || ""
-    });
+      lastStatus: previous?.lastStatus || "",
+      writeInFlight: previous?.writeInFlight || false,
+      pendingWrite: previous?.pendingWrite || false
+    };
+    this.activeTasks.set(record.taskKey, state);
 
     if (!shouldWrite) return;
+    state.pendingWrite = true;
+    if (state.writeInFlight) {
+      this.logger.debug(`Queued print task status update while previous write is still running: ${record.taskKey}`);
+      return;
+    }
 
-    await this.upsertPrintTask(merged);
-    this.activeTasks.set(record.taskKey, {
-      record: merged,
-      lastProgress: merged.progress,
-      lastWriteAt: Date.now(),
-      lastStatus: merged.status
-    });
+    await this.flushPrinterStatusTask(record.taskKey);
+  }
+
+  async flushPrinterStatusTask(taskKey) {
+    let state = this.activeTasks.get(taskKey);
+    if (!state || state.writeInFlight) return;
+
+    state.writeInFlight = true;
+    try {
+      while (true) {
+        state = this.activeTasks.get(taskKey) || state;
+        if (!state.pendingWrite) break;
+        state.pendingWrite = false;
+        const record = state.record;
+        await this.upsertPrintTask(record);
+        const latest = this.activeTasks.get(taskKey) || state;
+        state = {
+          ...latest,
+          lastProgress: record.progress,
+          lastWriteAt: Date.now(),
+          lastStatus: record.status,
+          writeInFlight: true
+        };
+        this.activeTasks.set(taskKey, state);
+      }
+    } finally {
+      state = this.activeTasks.get(taskKey);
+      if (state) {
+        state.writeInFlight = false;
+        this.activeTasks.set(taskKey, state);
+      }
+    }
   }
 
   async syncCloudPrintTasks(tasks, { onTaskSynced } = {}) {
-    if (!this.printTaskSyncEnabled) return { synced: 0, lastTaskTime: "" };
-    if (!this.taskDataSourceId || !Array.isArray(tasks) || tasks.length === 0) return { synced: 0, lastTaskTime: "" };
+    if (!this.printTaskSyncEnabled) return { synced: 0, changed: 0, unchanged: 0, lastTaskTime: "" };
+    if (!this.taskDataSourceId || !Array.isArray(tasks) || tasks.length === 0) {
+      return { synced: 0, changed: 0, unchanged: 0, lastTaskTime: "" };
+    }
 
     await this.ensureTaskSchema({ refresh: true });
     const records = tasks
       .map((task) => this.printTaskRecordFromCloudTask(task))
       .filter(Boolean)
       .sort((a, b) => printTaskRecordHistoryTimeMs(a) - printTaskRecordHistoryTimeMs(b));
-    if (records.length === 0) return { synced: 0, lastTaskTime: "" };
+    if (records.length === 0) return { synced: 0, changed: 0, unchanged: 0, lastTaskTime: "" };
 
     this.logger.info(`Syncing ${records.length} Bambu cloud print task(s) into Notion`);
 
@@ -1830,19 +1909,23 @@ export class NotionAmsSync {
     this.taskFilamentColorPageCache.clear();
     this.cloudTaskBatchMode = true;
     let synced = 0;
+    let changed = 0;
+    let unchanged = 0;
     let lastTaskTime = "";
     try {
       for (const record of records) {
-        await this.upsertPrintTask(record);
+        const result = await this.upsertPrintTask(record);
         synced += 1;
+        if (result?.changed === false) unchanged += 1;
+        else changed += 1;
         const recordTimeMs = printTaskRecordHistoryTimeMs(record);
         if (recordTimeMs > 0) lastTaskTime = new Date(recordTimeMs).toISOString();
-        if (onTaskSynced) await onTaskSynced(record, { synced, lastTaskTime });
+        if (onTaskSynced) await onTaskSynced(record, { synced, changed, unchanged, lastTaskTime });
       }
     } finally {
       this.cloudTaskBatchMode = false;
     }
-    return { synced, lastTaskTime };
+    return { synced, changed, unchanged, lastTaskTime };
   }
 
   printTaskRecordFromCloudTask(task) {
@@ -1850,12 +1933,12 @@ export class NotionAmsSync {
     const taskKey = this.taskKey({ taskId });
     if (!taskKey) return null;
 
-    const startTime = toIsoDate(task.startTime);
-    const endTime = toIsoDate(task.endTime);
-    const durationMinutes = this.durationMinutes(startTime, endTime, task.costTime);
-    const usedSlots = this.slotLabelsFromCloudTask(task);
     const status = this.statusFromCloudTask(task.status);
-    const snapshotUrl = task.snapShot || (status === "失败" ? task.cover || "" : "");
+    const startTime = toIsoDate(task.startTime);
+    const endTime = this.isTerminalTaskStatus(status) ? toIsoDate(task.endTime) : null;
+    const durationMinutes = this.isTerminalTaskStatus(status) ? this.durationMinutes(startTime, endTime, task.costTime) : null;
+    const usedSlots = this.slotLabelsFromCloudTask(task);
+    const snapshotUrl = task.snapShot || "";
     const filamentUsages = this.filamentUsagesFromCloudTask(task, usedSlots);
 
     return {
@@ -1871,7 +1954,7 @@ export class NotionAmsSync {
       startTime,
       endTime,
       durationMinutes,
-      progress: null,
+      progress: status === "已完成" ? 100 : null,
       layers: "",
       filamentWeight: toFiniteNumber(task.weight),
       filamentLength: this.filamentLengthMeters(task.length),
@@ -1885,10 +1968,11 @@ export class NotionAmsSync {
   }
 
   printTaskRecordFromPrinterState(printState) {
-    const taskId = printState?.task_id || printState?.subtask_id || "";
+    const taskId = !isZeroish(printState?.task_id) ? String(printState.task_id) : "";
+    const subtaskId = !isZeroish(printState?.subtask_id) ? String(printState.subtask_id) : "";
     const taskKey = this.taskKey({
       taskId,
-      subtaskId: printState?.subtask_id,
+      subtaskId,
       projectId: printState?.project_id,
       profileId: printState?.profile_id,
       gcodeFile: printState?.gcode_file,
@@ -1904,7 +1988,7 @@ export class NotionAmsSync {
     return {
       source: "mqtt",
       taskKey,
-      taskId: taskId ? String(taskId) : "",
+      taskId: taskId || subtaskId,
       title: printState.subtask_name || printState.gcode_file || `打印任务 ${taskId || taskKey.slice(-8)}`,
       printConfig: printState.subtask_name || "",
       printer: this.config.printerName,
@@ -1932,10 +2016,10 @@ export class NotionAmsSync {
   taskKey({ taskId, subtaskId, projectId, profileId, gcodeFile, gcodeStartTime }) {
     const printerSerial = this.config.printerSerial;
     if (!printerSerial) return "";
-    if (taskId) return `bambu:${printerSerial}:task:${taskId}`;
-    if (subtaskId) return `bambu:${printerSerial}:subtask:${subtaskId}`;
-    if (projectId && profileId) return `bambu:${printerSerial}:project:${projectId}:profile:${profileId}`;
-    if (gcodeFile && gcodeStartTime && gcodeStartTime !== "0") {
+    if (!isZeroish(taskId)) return `bambu:${printerSerial}:task:${taskId}`;
+    if (!isZeroish(subtaskId)) return `bambu:${printerSerial}:subtask:${subtaskId}`;
+    if (!isZeroish(projectId) && !isZeroish(profileId)) return `bambu:${printerSerial}:project:${projectId}:profile:${profileId}`;
+    if (gcodeFile && !isZeroish(gcodeStartTime)) {
       return `bambu:${printerSerial}:gcode:${hashString(`${gcodeFile}:${gcodeStartTime}`)}`;
     }
     return "";
@@ -1946,7 +2030,8 @@ export class NotionAmsSync {
     if (value === 1) return "运行中";
     if (value === 2) return "已完成";
     if (value === 3) return "失败";
-    if (value === 4) return "已取消";
+    if (value === 4) return "运行中";
+    if (value === 5) return "已取消";
     return "未知";
   }
 
@@ -2102,28 +2187,74 @@ export class NotionAmsSync {
     return `${current ?? "?"}/${count ?? "?"}`;
   }
 
+  emptyTaskMedia(overrides = {}) {
+    return {
+      thumbnailFiles: null,
+      snapshotFiles: null,
+      displayImageFiles: null,
+      pageCover: null,
+      coverUpload: null,
+      coverExternalUrl: "",
+      snapshotUpload: null,
+      snapshotExternalUrl: "",
+      displayImageUpload: null,
+      displayImageExternalUrl: "",
+      ...overrides
+    };
+  }
+
+  withPrintTaskLastSync(properties) {
+    const value = this.taskValueFor(this.config.taskProperties.lastSync, new Date());
+    return value ? { ...properties, [value[0]]: value[1] } : properties;
+  }
+
   async upsertPrintTask(record) {
     await this.ensureTaskSchema({ refresh: !this.cloudTaskBatchMode });
     const pages = await this.findTaskPagesByKey(record.taskKey);
     const canonical = pages.length > 0 ? this.chooseCanonicalTaskPage(pages) : null;
+    if (canonical && pages.length <= 1) {
+      const mediaPlan = this.taskMediaPlan(record, canonical);
+      const comparableProperties = await this.buildPrintTaskProperties(
+        record,
+        canonical,
+        this.emptyTaskMedia(),
+        pages,
+        { includeLastSync: false }
+      );
+      const matchesTask = !this.taskMediaPlanNeedsChanges(mediaPlan) && this.pagePropertiesMatch(canonical, comparableProperties);
+      const matchesUsages = matchesTask ? await this.taskFilamentUsagesMatch(record, canonical) : false;
+      if (matchesTask && matchesUsages) {
+        this.lastTaskSignatures.set(record.taskKey, JSON.stringify({
+          pageId: canonical.id,
+          properties: comparableProperties,
+          usages: record.filamentUsages || [],
+          cover: ""
+        }));
+        this.logger.debug(`No Notion changes for print task ${record.taskKey}`);
+        return { changed: false, action: "unchanged", pageId: canonical.id };
+      }
+    }
+
     const media = await this.prepareTaskMedia(record, canonical);
-    const properties = await this.buildPrintTaskProperties(record, canonical, media, pages);
+    const comparableProperties = await this.buildPrintTaskProperties(record, canonical, media, pages, { includeLastSync: false });
+    const properties = this.withPrintTaskLastSync(comparableProperties);
     const signature = JSON.stringify({
       pageId: canonical?.id || null,
-      properties,
+      properties: comparableProperties,
+      usages: record.filamentUsages || [],
       cover: media.coverUpload?.id || media.coverExternalUrl || ""
     });
 
     if (canonical && this.lastTaskSignatures.get(record.taskKey) === signature && pages.length <= 1) {
       this.logger.debug(`No Notion changes for print task ${record.taskKey}`);
-      return;
+      return { changed: false, action: "unchanged", pageId: canonical.id };
     }
 
     if (this.config.dryRun) {
       this.logger.info(
         `[dry-run] Would ${canonical ? "update" : "create"} Notion print task "${record.title}" (${record.taskKey})`
       );
-      return;
+      return { changed: true, action: canonical ? "updated" : "created", pageId: canonical?.id || "" };
     }
 
     let pageId = canonical?.id;
@@ -2157,6 +2288,7 @@ export class NotionAmsSync {
     }
 
     this.lastTaskSignatures.set(record.taskKey, signature);
+    return { changed: true, action: canonical ? "updated" : "created", pageId };
   }
 
   async findTaskPagesByKey(taskKey) {
@@ -2182,12 +2314,147 @@ export class NotionAmsSync {
     const props = this.config.taskProperties;
     const properties = page.properties || {};
     let score = 0;
-    if (getDateValue(properties[props.endTime])) score += 5;
+    if (getDateValue(properties[props.startTime])) score += 6;
+    if (getDateValue(properties[props.endTime])) score += 6;
+    if (getPlainText(properties[props.title])) score += 3;
+    if (getPlainText(properties[props.taskId])) score += 2;
     if (getFileValues(properties[props.snapshot]).length > 0) score += 4;
     if (getFileValues(properties[props.thumbnail]).length > 0) score += 3;
+    if (getFileValues(properties[props.displayImage]).length > 0) score += 2;
     score += getRelationIds(properties[props.usedFilaments]).length;
     if (getNumberValue(properties[props.filamentWeight]) != null) score += 2;
     return score;
+  }
+
+  async countPrintTaskPages({ includeDuplicates = false } = {}) {
+    if (!this.taskDataSourceId) return 0;
+
+    await this.ensureTaskSchema();
+    const filter = includeDuplicates ? null : this.taskGalleryViewFilter();
+    let count = 0;
+    let startCursor;
+    do {
+      const response = await this.client.dataSources.query({
+        data_source_id: this.taskDataSourceId,
+        ...(filter ? { filter } : {}),
+        page_size: 100,
+        start_cursor: startCursor
+      });
+      count += (response.results || []).length;
+      startCursor = response.has_more ? response.next_cursor : undefined;
+    } while (startCursor);
+    return count;
+  }
+
+  pagePropertyByIdentifier(page, property) {
+    const properties = page?.properties || {};
+    if (properties[property]) return properties[property];
+    return Object.values(properties).find((value) => value?.id === property) || null;
+  }
+
+  pagePropertiesMatch(page, expectedProperties) {
+    return Object.entries(expectedProperties || {}).every(([property, expected]) => {
+      const existing = this.pagePropertyByIdentifier(page, property);
+      return this.propertyValueMatches(existing, expected);
+    });
+  }
+
+  propertyValueMatches(existing, expected) {
+    if (!expected) return true;
+    if ("title" in expected) return getPlainText(existing) === textPayloadValue(expected.title);
+    if ("rich_text" in expected) return getPlainText(existing) === textPayloadValue(expected.rich_text);
+    if ("number" in expected) {
+      const actual = getNumberValue(existing);
+      return expected.number == null ? actual == null : actual === Number(expected.number);
+    }
+    if ("date" in expected) return sameDateValue(getDateValue(existing), expected.date?.start || "");
+    if ("select" in expected) return getSelectName(existing) === (expected.select?.name || "");
+    if ("status" in expected) return getSelectName(existing) === (expected.status?.name || "");
+    if ("url" in expected) return (existing?.url || "") === (expected.url || "");
+    if ("relation" in expected) {
+      return sameStringSet(getRelationIds(existing), (expected.relation || []).map((item) => item.id));
+    }
+    if ("files" in expected) {
+      const actual = getFileValues(existing).map(fileSignature).sort();
+      const desired = (expected.files || []).map(fileSignature).sort();
+      return actual.length === desired.length && actual.every((value, index) => value === desired[index]);
+    }
+    return false;
+  }
+
+  async backfillTaskDisplayImages() {
+    if (!this.taskDataSourceId) return { scanned: 0, updated: 0, skipped: 0, missingSource: 0 };
+
+    await this.ensureTaskSchema({ refresh: true });
+    const props = this.config.taskProperties;
+    const displaySchema = this.assertTaskProperty(props.displayImage, "print task display image backfill");
+    const syncStatusSchema = this.taskSchema?.[props.syncStatus];
+    const filterParts = [
+      { property: propId(props.displayImage, displaySchema), files: { is_empty: true } }
+    ];
+    if (syncStatusSchema) {
+      filterParts.push({
+        property: propId(props.syncStatus, syncStatusSchema),
+        select: { does_not_equal: "重复" }
+      });
+    }
+
+    const filter = filterParts.length === 1 ? filterParts[0] : { and: filterParts };
+    let startCursor;
+    let scanned = 0;
+    let updated = 0;
+    let skipped = 0;
+    let missingSource = 0;
+
+    do {
+      const response = await this.client.dataSources.query({
+        data_source_id: this.taskDataSourceId,
+        filter,
+        page_size: 100,
+        start_cursor: startCursor
+      });
+
+      for (const page of response.results || []) {
+        scanned += 1;
+        const properties = page.properties || {};
+        if (getSelectName(properties[props.syncStatus]) === "重复") {
+          skipped += 1;
+          continue;
+        }
+        if (getFileValues(properties[props.displayImage]).length > 0) {
+          skipped += 1;
+          continue;
+        }
+
+        const snapshotFiles = getFileValues(properties[props.snapshot]);
+        const thumbnailFiles = getFileValues(properties[props.thumbnail]);
+        const sourceFiles = snapshotFiles.length > 0 ? snapshotFiles : thumbnailFiles;
+        const displayFiles = sourceFiles.map((file) => this.displayImageFileFromExisting(file)).filter(Boolean);
+        if (displayFiles.length === 0) {
+          missingSource += 1;
+          continue;
+        }
+
+        if (!this.config.dryRun) {
+          await this.client.pages.update({
+            page_id: page.id,
+            properties: compactObject([
+              this.taskValueFor(props.displayImage, displayFiles)
+            ])
+          });
+        }
+        updated += 1;
+      }
+
+      startCursor = response.has_more ? response.next_cursor : undefined;
+    } while (startCursor);
+
+    if (scanned > 0 || updated > 0) {
+      this.logger.info(
+        `Backfilled print task display images: ${updated} updated, ${skipped} skipped, ${missingSource} missing source`
+      );
+    }
+    return { scanned, updated, skipped, missingSource };
   }
 
   async markDuplicateTaskPages(taskKey, pages, canonicalPageId) {
@@ -2202,6 +2469,54 @@ export class NotionAmsSync {
       await this.client.pages.update({ page_id: page.id, properties });
       this.logger.warn(`Marked duplicate Notion print task ${publicPageId(page.id)} for ${taskKey}`);
     }
+  }
+
+  withTaskFilamentLastSync(properties) {
+    const value = this.taskFilamentValueFor(this.config.taskFilamentProperties.lastSync, new Date());
+    return value ? { ...properties, [value[0]]: value[1] } : properties;
+  }
+
+  async taskFilamentUsagesMatch(record, taskPage) {
+    const usages = record.filamentUsages || [];
+    const taskPageId = typeof taskPage === "string" ? taskPage : taskPage?.id;
+    if (!this.taskFilamentDataSourceId || !taskPageId || usages.length === 0) return true;
+
+    await this.ensureTaskFilamentSchema();
+    await this.ensureTaskFilamentSpecSchema();
+    const usagePageIds = [];
+    for (const usage of usages) {
+      const detailKey = `${record.taskKey}:filament:${usage.index}`;
+      const pages = await this.findTaskFilamentPagesByKey(detailKey);
+      const page = pages[0] || null;
+      if (!page || pages.length > 1) return false;
+      usagePageIds.push(page.id);
+
+      let specPageId = "";
+      if (this.taskFilamentSpecDataSourceId) {
+        const specPages = await this.findTaskFilamentSpecPagesByKey(this.filamentSpecKey(usage));
+        specPageId = specPages[0]?.id || "";
+        if (!specPageId) return false;
+      }
+
+      const title = this.taskFilamentUsageTitle(usage);
+      const properties = this.buildTaskFilamentUsageProperties(
+        record,
+        taskPageId,
+        usage,
+        detailKey,
+        title,
+        specPageId,
+        { includeLastSync: false }
+      );
+      if (!this.pagePropertiesMatch(page, properties)) return false;
+    }
+
+    const relationProperty = this.config.taskProperties.filamentUsages;
+    if (relationProperty && this.taskSchema?.[relationProperty] && typeof taskPage !== "string") {
+      const currentRelationIds = getRelationIds(taskPage.properties?.[relationProperty]);
+      if (!sameStringSet(currentRelationIds, usagePageIds)) return false;
+    }
+    return true;
   }
 
   async syncTaskFilamentUsages(record, taskPageId) {
@@ -2491,7 +2806,20 @@ export class NotionAmsSync {
     const pages = await this.findTaskFilamentPagesByKey(detailKey);
     const page = pages[0] || null;
     const title = this.taskFilamentUsageTitle(usage);
-    const properties = this.buildTaskFilamentUsageProperties(record, taskPageId, usage, detailKey, title, specPageId);
+    const comparableProperties = this.buildTaskFilamentUsageProperties(
+      record,
+      taskPageId,
+      usage,
+      detailKey,
+      title,
+      specPageId,
+      { includeLastSync: false }
+    );
+    if (page && pages.length === 1 && this.pagePropertiesMatch(page, comparableProperties)) {
+      return page;
+    }
+
+    const properties = this.withTaskFilamentLastSync(comparableProperties);
     const icon = swatchIcon(usage.color);
 
     if (this.config.dryRun) {
@@ -2600,7 +2928,7 @@ export class NotionAmsSync {
     ]);
   }
 
-  buildTaskFilamentUsageProperties(record, taskPageId, usage, detailKey, title, specPageId) {
+  buildTaskFilamentUsageProperties(record, taskPageId, usage, detailKey, title, specPageId, { includeLastSync = true } = {}) {
     const props = this.config.taskFilamentProperties;
     return compactObject([
       this.taskFilamentValueFor(props.title, title),
@@ -2616,59 +2944,119 @@ export class NotionAmsSync {
       this.taskFilamentValueFor(props.percent, usage.percent),
       this.taskFilamentValueFor(props.startTime, record.startTime),
       this.taskFilamentValueFor(props.status, record.status),
-      this.taskFilamentValueFor(props.lastSync, new Date())
+      includeLastSync ? this.taskFilamentValueFor(props.lastSync, new Date()) : null
     ]);
   }
 
-  async prepareTaskMedia(record, page) {
+  taskMediaPlan(record, page) {
     const props = this.config.taskProperties;
     const existingThumbnail = getFileValues(page?.properties?.[props.thumbnail]);
     const existingSnapshot = getFileValues(page?.properties?.[props.snapshot]);
+    const existingDisplayImage = getFileValues(page?.properties?.[props.displayImage]);
+    const existingCoverSource = getPlainText(page?.properties?.[props.rawCoverUrl]);
     const existingSnapshotSource = getPlainText(page?.properties?.[props.rawSnapshotUrl]);
     const hasStableThumbnail = existingThumbnail.some((file) => file.type === "file");
     const hasStableSnapshot = existingSnapshot.some((file) => file.type === "file");
-    const isFailedCoverFallback = record.status === "失败" && record.snapshotUrl && record.snapshotUrl === record.coverUrl;
+    const hasStableDisplayImage = existingDisplayImage.some((file) => file.type === "file");
+    const hasStablePageCover = page?.cover?.type === "file";
+    const snapshotSourceChanged = Boolean(
+      record.snapshotUrl &&
+        existingSnapshotSource &&
+        stableMediaSource(existingSnapshotSource) !== stableMediaSource(record.snapshotUrl)
+    );
+    const shouldClearSnapshot = Boolean(
+      !record.snapshotUrl &&
+        existingSnapshot.length > 0 &&
+        (
+          !this.isTerminalTaskStatus(record.status) ||
+          (
+            existingCoverSource &&
+            existingSnapshotSource &&
+            stableMediaSource(existingCoverSource) === stableMediaSource(existingSnapshotSource)
+          )
+        )
+    );
+    const needsSnapshotForDisplay = Boolean(
+      record.snapshotUrl &&
+        (!hasStableDisplayImage || !hasStablePageCover || snapshotSourceChanged)
+    );
     const shouldUploadSnapshot = Boolean(
       record.snapshotUrl &&
         (
           !hasStableSnapshot ||
-          (!existingSnapshotSource && isFailedCoverFallback) ||
-          (existingSnapshotSource && stableMediaSource(existingSnapshotSource) !== stableMediaSource(record.snapshotUrl))
+          snapshotSourceChanged ||
+          needsSnapshotForDisplay
         )
     );
-    const media = {
-      thumbnailFiles: null,
-      snapshotFiles: null,
-      pageCover: null,
-      coverUpload: null,
-      coverExternalUrl: "",
-      snapshotUpload: null,
-      snapshotExternalUrl: ""
+    const needsCoverForDisplay = Boolean(
+      !record.snapshotUrl &&
+        record.coverUrl &&
+        !hasStableDisplayImage
+    );
+    const shouldUploadCover = Boolean(
+      record.coverUrl &&
+        (
+          !hasStableThumbnail ||
+          needsCoverForDisplay
+        )
+    );
+    return {
+      hasStableThumbnail,
+      hasStableSnapshot,
+      hasStableDisplayImage,
+      hasStablePageCover,
+      snapshotSourceChanged,
+      shouldClearSnapshot,
+      needsSnapshotForDisplay,
+      shouldUploadSnapshot,
+      needsCoverForDisplay,
+      shouldUploadCover
     };
+  }
+
+  taskMediaPlanNeedsChanges(plan) {
+    return Boolean(plan.shouldClearSnapshot || plan.shouldUploadCover || plan.shouldUploadSnapshot);
+  }
+
+  async prepareTaskMedia(record, page) {
+    const plan = this.taskMediaPlan(record, page);
+    const media = this.emptyTaskMedia({
+      snapshotFiles: plan.shouldClearSnapshot ? [] : null
+    });
 
     if (this.config.dryRun) return media;
 
-    if (record.coverUrl && !hasStableThumbnail) {
+    if (plan.shouldUploadCover) {
       media.coverUpload = await this.importNotionFile(record.coverUrl, `${record.taskId || "task"}-cover.png`);
       media.coverExternalUrl = record.coverUrl;
-      media.thumbnailFiles = [this.fileRequest(media.coverUpload, record.coverUrl, "任务缩略图")];
+      if (!plan.hasStableThumbnail) {
+        media.thumbnailFiles = [this.fileRequest(media.coverUpload, record.coverUrl, "任务缩略图")];
+      }
     }
 
-    if (shouldUploadSnapshot) {
-      media.snapshotUpload = record.snapshotUrl === record.coverUrl && media.coverUpload
-        ? media.coverUpload
-        : await this.importNotionFile(record.snapshotUrl, `${record.taskId || "task"}-snapshot.jpg`);
+    if (plan.shouldUploadSnapshot) {
+      media.snapshotUpload = await this.importNotionFile(record.snapshotUrl, `${record.taskId || "task"}-snapshot.jpg`);
       media.snapshotExternalUrl = record.snapshotUrl;
-      media.snapshotFiles = [this.fileRequest(media.snapshotUpload, record.snapshotUrl, "完成截图")];
+      if (!plan.hasStableSnapshot || plan.snapshotSourceChanged) {
+        media.snapshotFiles = [this.fileRequest(media.snapshotUpload, record.snapshotUrl, "完成截图")];
+      }
     }
 
-    const coverUpload = media.snapshotUpload || media.coverUpload;
-    const coverUrl = media.snapshotExternalUrl || media.coverExternalUrl;
-    const shouldSetCover = page?.cover?.type !== "file" || shouldUploadSnapshot;
-    if (shouldSetCover && (coverUpload || coverUrl)) {
-      media.pageCover = coverUpload
-        ? { type: "file_upload", file_upload: { id: coverUpload.id } }
-        : { type: "external", external: { url: coverUrl } };
+    if (record.snapshotUrl && plan.shouldUploadSnapshot) {
+      media.displayImageUpload = media.snapshotUpload;
+      media.displayImageExternalUrl = record.snapshotUrl;
+      media.displayImageFiles = [this.fileRequest(media.displayImageUpload, record.snapshotUrl, "展示图片")];
+    } else if (!record.snapshotUrl && plan.needsCoverForDisplay && plan.shouldUploadCover) {
+      media.displayImageUpload = media.coverUpload;
+      media.displayImageExternalUrl = record.coverUrl;
+      media.displayImageFiles = [this.fileRequest(media.displayImageUpload, record.coverUrl, "展示图片")];
+    }
+
+    const shouldSetCover = Boolean(media.displayImageFiles && (!plan.hasStablePageCover || record.snapshotUrl));
+    if (shouldSetCover && (media.displayImageUpload || media.displayImageExternalUrl)) {
+      media.pageCover = media.displayImageUpload
+        ? { type: "file_upload", file_upload: { id: media.displayImageUpload.id } }
+        : { type: "external", external: { url: media.displayImageExternalUrl } };
     }
 
     return media;
@@ -2744,7 +3132,28 @@ export class NotionAmsSync {
     return { type: "external", external: { url }, name };
   }
 
-  async buildPrintTaskProperties(record, page, media, duplicatePages = []) {
+  displayImageFileFromExisting(file) {
+    const name = "展示图片";
+    if (file?.type === "file" && file.file?.url) {
+      return {
+        type: "file",
+        file: {
+          url: file.file.url,
+          ...(file.file.expiry_time ? { expiry_time: file.file.expiry_time } : {})
+        },
+        name
+      };
+    }
+    if (file?.type === "external" && file.external?.url) {
+      return { type: "external", external: { url: file.external.url }, name };
+    }
+    if (file?.type === "file_upload" && file.file_upload?.id) {
+      return { type: "file_upload", file_upload: { id: file.file_upload.id }, name };
+    }
+    return null;
+  }
+
+  async buildPrintTaskProperties(record, page, media, duplicatePages = [], { includeLastSync = true } = {}) {
     const props = this.config.taskProperties;
     const existing = page?.properties || {};
     const duplicateRelations = duplicatePages.flatMap((item) => getRelationIds(item.properties?.[props.usedFilaments]));
@@ -2763,13 +3172,29 @@ export class NotionAmsSync {
     const status = this.isTerminalTaskStatus(existingStatus) && !this.isTerminalTaskStatus(record.status)
       ? existingStatus
       : record.status;
+    const existingTitle = getPlainText(existing[props.title]);
+    const keepExistingTitle =
+      record.source === "mqtt" &&
+      existingTitle &&
+      (
+        this.isTerminalTaskStatus(existingStatus) ||
+        getDateValue(existing[props.endTime]) ||
+        getFileValues(existing[props.snapshot]).length > 0
+      );
     const progress = Math.max(getNumberValue(existing[props.progress]) ?? 0, record.progress ?? 0);
     const existingThumbnailFiles = getFileValues(existing[props.thumbnail]);
+    const existingDisplayImageFiles = getFileValues(existing[props.displayImage]);
     const snapshotFiles = media.snapshotFiles;
     const thumbnailFiles = existingThumbnailFiles.some((file) => file.type === "file") ? null : media.thumbnailFiles;
+    const displayImageFiles = existingDisplayImageFiles.some((file) => file.type === "file")
+      ? media.displayImageFiles
+      : (media.displayImageFiles || media.thumbnailFiles || media.snapshotFiles);
+    const rawSnapshotUrl = record.snapshotUrl
+      ? stableMediaSource(record.snapshotUrl)
+      : (Array.isArray(snapshotFiles) && snapshotFiles.length === 0 ? "" : getPlainText(existing[props.rawSnapshotUrl]));
 
     return compactObject([
-      this.taskValueFor(props.title, record.title),
+      this.taskValueFor(props.title, keepExistingTitle ? existingTitle : record.title),
       this.taskValueFor(props.taskKey, record.taskKey),
       this.taskValueFor(props.taskId, record.taskId),
       this.taskValueFor(props.printer, record.printer),
@@ -2791,9 +3216,10 @@ export class NotionAmsSync {
       this.taskValueFor(props.usedFilaments, relationIds),
       this.taskValueFor(props.thumbnail, thumbnailFiles),
       this.taskValueFor(props.snapshot, snapshotFiles),
+      this.taskValueFor(props.displayImage, displayImageFiles),
       this.taskValueFor(props.rawCoverUrl, stableMediaSource(record.coverUrl) || getPlainText(existing[props.rawCoverUrl])),
-      this.taskValueFor(props.rawSnapshotUrl, stableMediaSource(record.snapshotUrl) || getPlainText(existing[props.rawSnapshotUrl])),
-      this.taskValueFor(props.lastSync, new Date())
+      this.taskValueFor(props.rawSnapshotUrl, rawSnapshotUrl),
+      includeLastSync ? this.taskValueFor(props.lastSync, new Date()) : null
     ]);
   }
 
@@ -2836,7 +3262,7 @@ export class NotionAmsSync {
       case "url":
         return [property, { url: value ? String(value) : null }];
       case "files":
-        return Array.isArray(value) && value.length > 0 ? [property, { files: value }] : null;
+        return Array.isArray(value) ? [property, { files: value }] : null;
       case "relation":
         return [property, { relation: uniq(value || []).map((id) => ({ id })) }];
       default:
