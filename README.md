@@ -164,15 +164,14 @@ docker run -d \
 | `余量%` | Number | AMS 上报的剩余百分比 |
 | `剩余克数` | Number | 按余量和料盘重量估算 |
 | `材料` | Rich text | 例如 `PLA Basic` |
+| `颜色` | Rich text | 主色 hex，例如 `#C12E1F` |
+| `颜色列表` | Rich text | 多色/渐变耗材的全部色号，例如 `#0047BB / #BB22A3` |
+| `颜色类型` | Rich text | `单色`、`多色` 或 `渐变` |
 | `料盘重量g` | Number | AMS 上报的 `tray_weight`，默认 1000g |
 | `Tray UUID` | Rich text | Bambu 上报的另一个耗材/料盘识别值 |
 | `最后同步时间` | Date | 最近一次同步时间 |
 
-每条 `AMS 耗材` 页面会设置一个真实色号生成的小图片 icon，例如：
-
-```text
-https://dummyimage.com/64x64/C12E1F/C12E1F.png
-```
+每条 `AMS 耗材` 页面会把当前色号生成 64x64 PNG 并上传到 Notion 作为页面 icon。单色耗材显示纯色色块，多色耗材显示硬分段色条，渐变耗材显示平滑渐变。
 
 Notion 的 Relation 选择器通常会显示页面 icon，所以选择关联耗材时能直接看到颜色；标题只保留材料和 RFID 短码，避免重复信息太多。
 

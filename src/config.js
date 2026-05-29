@@ -104,6 +104,8 @@ export function loadConfig(source = process.env) {
         printer: optionalFrom(source, "NOTION_PRINTER_PROP"),
         material: optionalFrom(source, "NOTION_MATERIAL_PROP", "材料"),
         color: optionalFrom(source, "NOTION_COLOR_PROP", "颜色"),
+        colorList: optionalFrom(source, "NOTION_COLOR_LIST_PROP", "颜色列表"),
+        colorType: optionalFrom(source, "NOTION_COLOR_TYPE_PROP", "颜色类型"),
         colorAlias: optionalFrom(source, "NOTION_COLOR_ALIAS_PROP", "颜色别名"),
         tagUid: optionalFrom(source, "NOTION_TAG_UID_PROP"),
         trayUuid: optionalFrom(source, "NOTION_TRAY_UUID_PROP", "Tray UUID"),

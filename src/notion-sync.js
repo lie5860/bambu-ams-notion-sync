@@ -6,6 +6,11 @@ import {
   getPlainText,
   propertyPayload
 } from "./notion-properties.js";
+import {
+  colorIconDescriptor,
+  iconColorTypeLabel,
+  renderColorIconPng
+} from "./color-icon.js";
 
 const NOTION_MIN_REQUEST_INTERVAL_MS = 1000;
 
@@ -114,6 +119,23 @@ function colorLabel(value, alias = "") {
   return normalizeColor(value);
 }
 
+function colorListLabel(colors, fallback = "") {
+  const values = (Array.isArray(colors) ? colors : [])
+    .map(normalizeColor)
+    .filter(Boolean);
+  if (values.length > 0) return values.join(" / ");
+  return normalizeColor(fallback);
+}
+
+function trayColorTypeLabel(tray) {
+  const descriptor = colorIconDescriptor({
+    color: tray?.color,
+    colors: tray?.colors,
+    colorType: tray?.colorType
+  });
+  return iconColorTypeLabel(descriptor?.colorType || "single");
+}
+
 function getFileValues(propertyValue) {
   return Array.isArray(propertyValue?.files) ? propertyValue.files : [];
 }
@@ -217,6 +239,7 @@ export class NotionAmsSync {
     this.cloudTaskBatchMode = false;
     this.taskFilamentSpecPageCache = new Map();
     this.taskFilamentColorPageCache = new Map();
+    this.amsIconUploadCache = new Map();
     this.amsSyncEnabled = true;
     this.printTaskSyncEnabled = true;
   }
@@ -532,6 +555,8 @@ export class NotionAmsSync {
     add(props.printer, { type: "rich_text", rich_text: {} });
     add(props.material, { type: "rich_text", rich_text: {} });
     add(props.color, { type: "rich_text", rich_text: {} });
+    add(props.colorList, { type: "rich_text", rich_text: {} });
+    add(props.colorType, { type: "rich_text", rich_text: {} });
     add(props.colorAlias, { type: "rich_text", rich_text: {} });
     add(props.tagUid, { type: "rich_text", rich_text: {} });
     add(props.trayUuid, { type: "rich_text", rich_text: {} });
@@ -1582,6 +1607,7 @@ export class NotionAmsSync {
   async syncTray(tray, seenAt, colorAliases = null) {
     const page = await this.findPageByUid(tray.uid);
     const normalizedColor = normalizeColor(tray.color);
+    const iconDescriptor = colorIconDescriptor(tray);
     let colorAlias = normalizedColor && colorAliases?.has(normalizedColor) ? colorAliases.get(normalizedColor) : "";
     if (normalizedColor && !colorAliases?.has(normalizedColor)) {
       const colorMapping = await this.upsertTaskFilamentColor(tray.color);
@@ -1590,8 +1616,7 @@ export class NotionAmsSync {
     }
 
     const properties = this.buildTrayProperties(tray, seenAt, colorAlias);
-    const icon = swatchIcon(tray.color);
-    const signature = this.stableTraySignature(page, properties, icon);
+    const signature = this.stableTraySignature(page, properties, iconDescriptor);
 
     if (this.lastSignatures.get(tray.uid) === signature) {
       this.logger.debug(`No Notion changes for ${tray.uid} (${tray.slotLabel})`);
@@ -1599,12 +1624,13 @@ export class NotionAmsSync {
     }
 
     if (page) {
-      if (this.pageMatchesTray(page, tray, colorAlias, icon)) {
+      if (this.pageMatchesTray(page, tray, colorAlias, iconDescriptor)) {
         this.lastSignatures.set(tray.uid, signature);
         this.logger.debug(`No Notion changes for ${tray.uid} (${tray.slotLabel})`);
         return;
       }
 
+      const icon = await this.amsSwatchIcon(iconDescriptor);
       await this.updatePage(page.id, properties, tray, icon);
       this.lastSignatures.set(tray.uid, signature);
       return;
@@ -1615,6 +1641,7 @@ export class NotionAmsSync {
       return;
     }
 
+    const icon = await this.amsSwatchIcon(iconDescriptor);
     await this.createMissingPage(tray, properties, icon);
     this.lastSignatures.set(tray.uid, signature);
   }
@@ -1628,7 +1655,7 @@ export class NotionAmsSync {
     return JSON.stringify({ pageId: page?.id || null, properties: stableProperties, icon });
   }
 
-  pageMatchesTray(page, tray, colorAlias, icon) {
+  pageMatchesTray(page, tray, colorAlias, iconDescriptor) {
     const props = this.config.properties;
     return (
       this.pagePropertyMatches(page, props.title, this.displayTitle(tray)) &&
@@ -1640,11 +1667,13 @@ export class NotionAmsSync {
       this.pagePropertyMatches(page, props.printer, this.config.printerName) &&
       this.pagePropertyMatches(page, props.material, tray.material) &&
       this.pagePropertyMatches(page, props.color, tray.color) &&
+      this.pagePropertyMatches(page, props.colorList, colorListLabel(tray.colors, tray.color)) &&
+      this.pagePropertyMatches(page, props.colorType, trayColorTypeLabel(tray)) &&
       this.pagePropertyMatches(page, props.colorAlias, colorLabel(tray.color, colorAlias)) &&
       this.pagePropertyMatches(page, props.tagUid, tray.tagUid) &&
       this.pagePropertyMatches(page, props.trayUuid, tray.trayUuid) &&
       this.pagePropertyMatches(page, props.trayWeight, tray.trayWeight) &&
-      this.pageIconMatches(page.icon, icon)
+      this.pageIconMatches(page.icon, iconDescriptor)
     );
   }
 
@@ -1682,12 +1711,18 @@ export class NotionAmsSync {
     }
   }
 
-  pageIconMatches(pageIcon, desiredIcon) {
-    if (!desiredIcon) return true;
-    const desiredUrl = desiredIcon.type === "external" ? desiredIcon.external?.url || "" : "";
-    if (!desiredUrl) return true;
-    const currentUrl = pageIcon?.type === "external" ? pageIcon.external?.url || "" : "";
-    return currentUrl === desiredUrl;
+  pageIconMatches(pageIcon, iconDescriptor) {
+    if (!iconDescriptor) return true;
+    if (iconDescriptor.type === "external") {
+      const desiredUrl = iconDescriptor.external?.url || "";
+      if (!desiredUrl) return true;
+      const currentUrl = pageIcon?.type === "external" ? pageIcon.external?.url || "" : "";
+      return currentUrl === desiredUrl;
+    }
+    if (!iconDescriptor.key) return true;
+    if (!pageIcon) return false;
+    if (pageIcon.type === "file" || pageIcon.type === "file_upload") return true;
+    return false;
   }
 
   async findPageByUid(uid) {
@@ -1719,6 +1754,8 @@ export class NotionAmsSync {
       this.valueFor(props.printer, this.config.printerName),
       this.valueFor(props.material, tray.material),
       this.valueFor(props.color, tray.color),
+      this.valueFor(props.colorList, colorListLabel(tray.colors, tray.color)),
+      this.valueFor(props.colorType, trayColorTypeLabel(tray)),
       this.valueFor(props.colorAlias, colorLabel(tray.color, colorAlias)),
       this.valueFor(props.tagUid, tray.tagUid),
       this.valueFor(props.trayUuid, tray.trayUuid),
@@ -2774,7 +2811,6 @@ export class NotionAmsSync {
         const currentAlias = getPlainText(properties[props.colorAlias]);
         if (currentAlias === alias) continue;
 
-        const icon = swatchIcon(color);
         const updateProperties = compactObject([
           this.valueFor(props.colorAlias, alias),
           this.valueFor(props.lastSync, new Date())
@@ -2787,8 +2823,7 @@ export class NotionAmsSync {
 
         await this.client.pages.update({
           page_id: page.id,
-          properties: updateProperties,
-          ...(icon ? { icon } : {})
+          properties: updateProperties
         });
         updated += 1;
       }
@@ -3101,6 +3136,58 @@ export class NotionAmsSync {
       this.logger.warn(`Failed to upload Notion file "${filename}": ${error.message}`);
       return null;
     }
+  }
+
+  async uploadNotionFileBytes(bytes, filename, contentType) {
+    if (!bytes || !this.client.fileUploads?.create || !this.client.fileUploads?.send) return null;
+
+    try {
+      const upload = await this.client.fileUploads.create({
+        mode: "single_part",
+        filename,
+        content_type: contentType
+      });
+      let sent = await this.client.fileUploads.send({
+        file_upload_id: upload.id,
+        file: {
+          filename,
+          data: new Blob([bytes], { type: contentType })
+        }
+      });
+
+      for (let i = 0; i < 10 && sent.status === "pending"; i += 1) {
+        await sleep(1000);
+        sent = await this.client.fileUploads.retrieve({ file_upload_id: upload.id });
+      }
+
+      if (sent.status !== "uploaded") {
+        this.logger.warn(`Notion file upload for "${filename}" ended with status "${sent.status}"`);
+        return null;
+      }
+
+      return sent;
+    } catch (error) {
+      this.logger.warn(`Failed to upload Notion file "${filename}": ${error.message}`);
+      return null;
+    }
+  }
+
+  async amsSwatchIcon(descriptor) {
+    if (!descriptor?.key) return undefined;
+    const cachedId = this.amsIconUploadCache.get(descriptor.key);
+    if (cachedId) {
+      return { type: "file_upload", file_upload: { id: cachedId } };
+    }
+
+    const png = renderColorIconPng(descriptor);
+    if (!png) return undefined;
+
+    const filename = `ams-filament-${hashString(descriptor.key)}.png`;
+    const upload = await this.uploadNotionFileBytes(png, filename, "image/png");
+    if (!upload?.id) return undefined;
+
+    this.amsIconUploadCache.set(descriptor.key, upload.id);
+    return { type: "file_upload", file_upload: { id: upload.id } };
   }
 
   contentTypeForFilename(filename) {

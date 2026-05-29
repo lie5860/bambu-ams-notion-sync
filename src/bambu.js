@@ -29,7 +29,28 @@ function mergePlainObjects(target, source) {
 
 function normalizeHexColor(value) {
   if (!value || typeof value !== "string") return "";
-  return value.startsWith("#") ? value : `#${value.slice(0, 6)}`;
+  const hex = value.replace(/^#/, "").slice(0, 6).toUpperCase();
+  return /^[0-9A-F]{6}$/.test(hex) ? `#${hex}` : "";
+}
+
+function normalizeHexColors(values, fallback = "") {
+  const source = Array.isArray(values) ? values : [values];
+  const colors = [];
+  for (const value of source) {
+    const color = normalizeHexColor(value);
+    if (color && !colors.includes(color)) colors.push(color);
+  }
+
+  const fallbackColor = normalizeHexColor(fallback);
+  if (colors.length === 0 && fallbackColor) colors.push(fallbackColor);
+  return colors;
+}
+
+function trayColorType(slot, colors) {
+  if (colors.length < 2) return "single";
+  const raw = Number.parseInt(slot.ctype, 10);
+  if (raw === 1) return "multi";
+  return "gradient";
 }
 
 function correctRemainPercent(remain, trayWeight, correctForTrayWeight) {
@@ -71,6 +92,8 @@ function traySnapshotSignature(trays) {
         material: tray.material,
         trayType: tray.trayType,
         color: tray.color,
+        colors: tray.colors || [],
+        colorType: tray.colorType || "",
         remainPercent: tray.remainPercent,
         remainGrams: tray.remainGrams,
         trayWeight: tray.trayWeight
@@ -104,6 +127,8 @@ export function extractAmsTrays(message, config) {
         remainPercent != null && trayWeight != null
           ? Math.round((remainPercent / 100) * trayWeight)
           : null;
+      const colors = normalizeHexColors(slot.cols, slot.tray_color);
+      const colorType = trayColorType(slot, colors);
 
       trays.push({
         uid,
@@ -114,7 +139,9 @@ export function extractAmsTrays(message, config) {
         slotLabel: slotLabel(ams.id, slot.id),
         material: slot.tray_sub_brands || slot.tray_type || "",
         trayType: slot.tray_type || "",
-        color: normalizeHexColor(slot.tray_color || slot.cols?.[0] || ""),
+        color: colors[0] || "",
+        colors,
+        colorType,
         remainPercent,
         remainGrams,
         trayWeight,
