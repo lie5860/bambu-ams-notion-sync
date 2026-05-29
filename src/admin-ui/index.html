@@ -1,0 +1,1483 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bambu AMS Notion Sync</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;1,600;1,700&display=swap" rel="stylesheet">
+  <style>
+    :root { color-scheme: light; --bg:#F9F7F3; --surface:#F0EBE1; --surface-2:#F6F1E8; --text:#111827; --muted:#5f5b53; --line:#ded6c9; --ink:#050505; --paper:#F9F7F3; --accent:#93c5fd; --bad:#b42318; --ok:#176b4d; --warn:#9a5b13; --zinc:#18181b; }
+    * { box-sizing: border-box; }
+    html { scroll-behavior:smooth; overflow-x:hidden; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding:0 0 36px; overflow-x:hidden; -webkit-font-smoothing:antialiased; }
+    main { width:min(1080px,100%); margin:0 auto; display:grid; gap:14px; padding:0 14px; }
+    section { background:var(--surface); border:1px solid rgba(17,24,39,.08); border-radius:24px; overflow:hidden; }
+    h1, h2 { font-family:"Playfair Display", Georgia, serif; font-weight:700; letter-spacing:0; }
+    h1 { font-size:clamp(34px, 5.4vw, 58px); line-height:.94; margin:0; color:var(--paper); max-width:720px; }
+    h1 em, h2 em { font-style:italic; font-weight:600; }
+    h2 { font-size:clamp(22px, 2.4vw, 32px); line-height:1; margin:0; }
+    h3 { font-size:14px; margin:0; }
+    p { color:var(--muted); margin:0; line-height:1.55; }
+    form { display:grid; gap:12px; }
+    .hero { width:100%; background:#000; color:var(--paper); border:0; border-radius:0 0 28px 28px; padding:24px 28px 22px; }
+    .heroInner { width:100%; margin:0 auto; display:grid; gap:12px; }
+    .heroTop { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; color:var(--accent); font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.14em; }
+    .topControls { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; align-items:center; letter-spacing:0; text-transform:none; }
+    .segmented { display:inline-flex; flex:0 0 auto; width:max-content; gap:4px; align-items:center; border:1px solid rgba(249,247,243,.22); border-radius:999px; padding:3px; background:rgba(249,247,243,.08); }
+    .segmentButton { min-height:28px; padding:0 10px; border-radius:999px; background:transparent; color:#c7d2fe; font-size:12px; line-height:1; }
+    .segmentButton::after { content:none !important; }
+    .segmentButton:hover { transform:none !important; background:rgba(249,247,243,.1); }
+    .segmentButton.active { background:var(--paper); color:#000; }
+    .heroCopy { max-width:620px; color:#d7d2c8; font-size:15px; line-height:1.55; }
+    .heroActions { display:flex; flex-wrap:wrap; gap:10px; margin-top:2px; }
+    .heroActions button.secondary { background:rgba(249,247,243,.14); color:var(--paper); border:1px solid rgba(249,247,243,.24); }
+    .headlineMask { display:block; overflow:hidden; padding-bottom:.04em; }
+    .headlineLine { display:block; transform:translateY(50px); opacity:0; animation:heroReveal .8s ease-out forwards; }
+    .headlineMask:nth-child(2) .headlineLine { animation-delay:.12s; }
+    .headlineMask:nth-child(3) .headlineLine { animation-delay:.24s; }
+    .accent { color:var(--accent); }
+    .bento { display:grid; grid-template-columns:1.15fr .9fr .95fr; gap:12px; background:transparent; border:0; overflow:visible; }
+    .featureCard { min-height:136px; border-radius:22px; border:1px solid rgba(17,24,39,.08); background:var(--surface); padding:18px; display:grid; align-content:space-between; gap:12px; transform:translateY(34px); opacity:0; }
+    .featureCard.dark { background:#000; color:var(--paper); border-color:#000; }
+    .featureCard.dark p { color:#d7d2c8; }
+    .featureCard .eyebrow { color:var(--muted); font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
+    .featureCard.dark .eyebrow { color:var(--accent); }
+    .featureCard p { font-size:14px; }
+    .revealGroup.is-visible .featureCard { animation:cardReveal .72s ease-out forwards; animation-delay:var(--delay, 0ms); }
+    .panel { border-radius:24px; background:var(--surface); }
+    .panelHeader { width:100%; height:auto; border:0; background:transparent; color:var(--text); display:grid; grid-template-columns:auto 1fr auto auto; gap:14px; align-items:center; padding:18px 20px; text-align:left; cursor:pointer; }
+    .stepNo { width:32px; height:32px; display:grid; place-items:center; border-radius:999px; background:#000; color:var(--paper); font-weight:800; }
+    .stepCopy { display:grid; gap:3px; min-width:0; }
+    .summary { color:var(--muted); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .pill { border:1px solid rgba(17,24,39,.12); border-radius:999px; padding:6px 11px; color:var(--muted); background:rgba(249,247,243,.64); font-size:12px; font-weight:800; white-space:nowrap; }
+    .pill.ok { color:var(--ok); border-color:rgba(23,107,77,.22); background:#eaf4ed; }
+    .pill.warn { color:var(--warn); border-color:rgba(154,91,19,.24); background:#fbefd9; }
+    .pill.bad { color:var(--bad); border-color:rgba(180,35,24,.22); background:#f8e5e2; }
+    .chevron { color:var(--muted); transition:transform .16s ease; }
+    .panel.open .chevron { transform:rotate(180deg); }
+    .panelBody { display:none; gap:16px; padding:16px 20px 20px; border-top:1px solid rgba(17,24,39,.08); }
+    .panel.open .panelBody { display:grid; }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .switches { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .switch { display:grid; grid-template-columns:1fr auto auto; gap:12px; align-items:center; border:1px solid rgba(17,24,39,.08); border-radius:18px; padding:14px; background:rgba(249,247,243,.58); }
+    .switchCopy { display:grid; gap:3px; min-width:0; }
+    .switchCopy strong { color:var(--text); font-size:13px; }
+    .switchCopy small { color:var(--muted); font-size:12px; line-height:1.35; }
+    .switch input { position:absolute; opacity:0; pointer-events:none; }
+    .switchKnob { width:42px; height:24px; border-radius:999px; background:#d2cabd; position:relative; transition:background .16s ease; }
+    .switchKnob::after { content:""; position:absolute; width:18px; height:18px; border-radius:999px; background:#fff; top:3px; left:3px; box-shadow:0 1px 3px rgba(18,29,45,.18); transition:transform .16s ease; }
+    .switch input:checked + .switchKnob { background:#000; }
+    .switch input:checked + .switchKnob::after { transform:translateX(18px); }
+    label { display:grid; gap:7px; font-size:13px; color:var(--text); font-weight:700; }
+    input, select { height:40px; border:1px solid rgba(17,24,39,.12); border-radius:999px; padding:0 15px; font:inherit; color:var(--text); background-color:rgba(249,247,243,.78); min-width:0; }
+    select { appearance:none; padding-right:38px; background-image:linear-gradient(45deg, transparent 50%, #111827 50%), linear-gradient(135deg, #111827 50%, transparent 50%); background-position:calc(100% - 20px) 17px, calc(100% - 14px) 17px; background-size:6px 6px, 6px 6px; background-repeat:no-repeat; }
+    input:focus, select:focus { outline:0; border-color:#111827; background-color:#fff; box-shadow:0 0 0 3px rgba(17,24,39,.10); }
+    button { min-height:40px; border:0; border-radius:999px; padding:0 16px; font:inherit; font-weight:800; cursor:pointer; background:#000; color:var(--paper); display:inline-flex; align-items:center; justify-content:center; gap:10px; transition:background .18s ease, color .18s ease, transform .18s ease; }
+    button:not(.panelHeader)::after { content:"→"; display:inline-block; transition:transform .18s ease; }
+    button:not(.panelHeader):hover::after { transform:translateX(4px); }
+    button:not(.panelHeader):hover { transform:translateY(-1px); }
+    button:disabled { opacity:.48; cursor:not-allowed; transform:none !important; }
+    button:disabled::after { transform:none !important; }
+    button.secondary { background:#e8dfd1; color:#111827; }
+    button.danger { background:#b42318; }
+    .buttons { display:flex; flex-wrap:wrap; gap:10px; }
+    .cardAction { align-self:end; justify-self:start; min-height:36px; padding:0 14px; font-size:13px; }
+    .featureCard.dark .cardAction { background:var(--paper); color:#000; }
+    .progress { border:1px solid rgba(17,24,39,.08); border-radius:18px; padding:14px; display:grid; gap:12px; background:rgba(249,247,243,.58); }
+    .progressHead { display:flex; justify-content:space-between; gap:12px; align-items:center; color:var(--text); font-size:13px; font-weight:800; }
+    .progressMeta { color:var(--muted); font-size:12px; font-weight:700; text-align:right; min-width:0; max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border:1px solid rgba(17,24,39,.10); border-radius:999px; padding:4px 9px; background:rgba(249,247,243,.7); }
+    .progressTrack { height:6px; border-radius:999px; background:#ddd3c4; overflow:hidden; }
+    .progressFill { display:block; height:100%; width:0; border-radius:inherit; background:#000; transition:width .2s ease; }
+    .progress.ok .progressFill { background:var(--ok); }
+    .progress.warn .progressFill { background:#000; }
+    .progress.bad .progressFill { background:var(--bad); }
+    .progressSteps { display:flex; flex-wrap:wrap; gap:7px; }
+    .progressStep { display:inline-flex; align-items:center; gap:6px; min-width:0; color:var(--muted); font-size:12px; line-height:1; border:1px solid transparent; border-radius:999px; padding:6px 9px; background:transparent; }
+    .progressDot { width:7px; height:7px; flex:0 0 auto; border-radius:999px; border:0; background:#c9bead; }
+    .progressStep span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .progressStep.done { color:var(--ok); background:#eaf4ed; }
+    .progressStep.active { color:#000; font-weight:800; border-color:#000; background:#f8f4ed; }
+    .progressStep.done .progressDot { background:var(--ok); }
+    .progressStep.active .progressDot { background:#000; box-shadow:0 0 0 3px rgba(17,24,39,.10); }
+    .progressStep.bad { color:var(--bad); font-weight:700; }
+    .progressStep.bad .progressDot { background:var(--bad); }
+    .status { display:none; border:1px solid rgba(17,24,39,.10); border-radius:16px; padding:10px 13px; color:var(--muted); white-space:normal; font-size:13px; line-height:1.45; background:rgba(249,247,243,.58); }
+    .status.active { display:block; }
+    .status.ok { color:var(--ok); background:#edf5ef; border-color:rgba(23,107,77,.18); }
+    .status.warn { color:#5d5142; background:#f8f0e2; border-color:rgba(154,91,19,.18); }
+    .status.bad { color:var(--bad); background:#f7e8e5; border-color:rgba(180,35,24,.20); }
+    .device { border:1px solid rgba(17,24,39,.10); border-radius:18px; padding:13px 15px; display:grid; gap:8px; font-size:13px; margin-top:10px; background:rgba(249,247,243,.58); }
+    .confirm { display:none; gap:12px; border:1px solid rgba(180,35,24,.22); background:#f8e5e2; border-radius:18px; padding:14px; }
+    .confirm.active { display:grid; }
+    .inlineNote { border:1px solid rgba(17,24,39,.08); border-radius:16px; padding:12px 14px; background:rgba(249,247,243,.52); color:var(--muted); font-size:13px; line-height:1.45; }
+    .subtle { color:var(--muted); font-size:13px; }
+    code { font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    [hidden] { display:none !important; }
+    body.mode-minimal main { width:min(860px,100%); gap:12px; }
+    body.mode-minimal .hero { padding:14px 22px 16px; border-radius:0 0 20px 20px; }
+    body.mode-minimal .heroInner { gap:6px; }
+    body.mode-minimal h1 { font-size:clamp(28px, 5vw, 40px); max-width:620px; }
+    body.mode-minimal .heroCopy, body.mode-minimal .heroActions, body.mode-minimal .bento { display:none; }
+    body.mode-minimal .panel { display:none; }
+    body.mode-minimal .panel.activeStep { display:block; }
+    body.mode-minimal .panel.activeStep .panelBody { display:grid; }
+    body.mode-minimal .panelHeader { grid-template-columns:1fr auto; cursor:default; }
+    body.mode-minimal .panelHeader::after { content:none; }
+    body.mode-minimal .panelHeader:hover { transform:none; }
+    body.mode-minimal .stepNo { display:none; }
+    body.mode-minimal .pill { grid-column:auto; justify-self:end; }
+    body.mode-minimal .chevron { display:none; }
+    @keyframes heroReveal { to { transform:translateY(0); opacity:1; } }
+    @keyframes cardReveal { to { transform:translateY(0); opacity:1; } }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior:auto; }
+      .headlineLine, .featureCard { animation:none !important; transform:none !important; opacity:1 !important; }
+      button, button::after, .chevron, .progressFill, .switchKnob, .switchKnob::after { transition:none !important; }
+    }
+    @media (max-width:860px){ .bento{grid-template-columns:1fr;} }
+    @media (max-width:720px){ main{padding:0 12px;} .hero{padding:20px 16px 18px;} .heroTop{align-items:center;} .topControls{gap:6px;} .grid,.switches{grid-template-columns:1fr;} .panelHeader{grid-template-columns:auto 1fr auto;} .pill{grid-column:2 / 4; justify-self:start;} body.mode-minimal .panelHeader{grid-template-columns:1fr;} body.mode-minimal .pill{grid-column:auto; justify-self:start;} .progressHead{display:grid;} .progressMeta{text-align:left; max-width:100%; justify-self:start;} }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="heroInner">
+        <div class="heroTop">
+          <span data-i18n="hero.kicker">私有打印工作台</span>
+          <span class="topControls">
+            <span class="segmented" aria-label="显示模式" data-i18n-aria-label="mode.switch">
+              <button type="button" class="segmentButton active" data-mode="default" data-i18n="mode.default">默认</button>
+              <button type="button" class="segmentButton" data-mode="minimal" data-i18n="mode.minimal">极简</button>
+            </span>
+            <span class="segmented" aria-label="切换语言" data-i18n-aria-label="language.switch">
+              <button type="button" class="segmentButton active" data-lang="zh">中文</button>
+              <button type="button" class="segmentButton" data-lang="en">EN</button>
+            </span>
+          </span>
+        </div>
+        <h1 aria-label="Bambu AMS Notion Sync">
+          <span class="headlineMask"><span class="headlineLine">Bambu AMS</span></span>
+          <span class="headlineMask"><span class="headlineLine"><em>Notion</em> Sync</span></span>
+        </h1>
+        <p class="heroCopy" data-i18n="hero.copy">把拓竹云、AMS 料盘和打印历史收拢到一个安静的 Notion 工作台。配置、同步、回填和运行状态都在这里完成。</p>
+        <div class="heroActions" aria-label="快捷操作" data-i18n-aria-label="hero.actions">
+          <button id="heroPrimaryAction" type="button" data-open-panel="bambu">继续配置</button>
+          <button id="heroSyncAction" type="button" class="secondary">立即同步</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="bento revealGroup" aria-label="同步状态概览" data-i18n-aria-label="overview.aria">
+      <article class="featureCard" style="--delay:0ms">
+        <span class="eyebrow">Bambu</span>
+        <h2>Cloud <em>Link</em></h2>
+        <p id="bentoBambu">检查拓竹云登录状态...</p>
+        <button type="button" class="cardAction" data-open-panel="bambu" data-i18n="action.bambu">账号与打印机</button>
+      </article>
+      <article class="featureCard dark" style="--delay:120ms">
+        <span class="eyebrow">Workspace</span>
+        <h2>Notion <em>Flow</em></h2>
+        <p id="bentoNotion">等待 Notion 页面和密钥。</p>
+        <button type="button" class="cardAction" data-open-panel="notion" data-i18n="action.notion">Notion 配置</button>
+      </article>
+      <article class="featureCard" style="--delay:240ms">
+        <span class="eyebrow">Runtime</span>
+        <h2>Sync <em>Pulse</em></h2>
+        <p id="bentoSync">等待同步服务状态。</p>
+        <button type="button" class="cardAction" data-open-panel="sync" data-i18n="action.sync">同步控制</button>
+      </article>
+    </section>
+
+    <section id="bambuPanel" class="panel" data-panel="bambu">
+      <button class="panelHeader" type="button" data-open-panel="bambu">
+        <span class="stepNo">1</span>
+        <span class="stepCopy">
+          <h2>Bambu <em>Cloud</em></h2>
+          <span id="bambuSummary" class="summary">检查登录状态...</span>
+        </span>
+        <span id="bambuPill" class="pill warn">待登录</span>
+        <span class="chevron">⌄</span>
+      </button>
+      <div class="panelBody">
+        <div id="bambuTokenBox" class="status"></div>
+
+        <form id="loginForm">
+          <div class="grid">
+            <label><span data-i18n="field.region">区域</span>
+              <select name="region">{{REGION_OPTIONS}}</select>
+            </label>
+            <label><span data-i18n="field.account">账号邮箱或手机号</span>
+              <input name="account" autocomplete="username" required>
+            </label>
+            <label><span data-i18n="field.password">密码</span>
+              <input name="password" type="password" autocomplete="current-password" required>
+            </label>
+          </div>
+          <button type="submit" data-i18n="button.loginBambu">登录拓竹云</button>
+        </form>
+
+        <form id="codeForm" hidden>
+          <label><span data-i18n="field.code">验证码</span>
+            <input name="code" autocomplete="one-time-code" required>
+          </label>
+          <button type="submit" data-i18n="button.submitCode">提交验证码</button>
+        </form>
+
+        <form id="tfaForm" hidden>
+          <label><span data-i18n="field.tfaCode">多因素验证码</span>
+            <input name="tfaCode" autocomplete="one-time-code" required>
+          </label>
+          <button type="submit" data-i18n="button.submitMfa">提交 MFA</button>
+        </form>
+
+        <div id="devices"></div>
+
+        <form id="bambuSettingsForm">
+          <h3 data-i18n="section.printerSettings">打印机设置</h3>
+          <div class="grid">
+            <label><span data-i18n="field.syncMode">同步方式</span>
+              <select name="BAMBU_CONNECTION_MODE">
+                <option value="cloud" data-i18n="option.cloudSync">云端同步</option>
+                <option value="local" data-i18n="option.localSync">局域网同步</option>
+              </select>
+            </label>
+            <label><span data-i18n="field.printerSerial">打印机序列号</span>
+              <input name="BAMBU_PRINTER_SERIAL">
+            </label>
+            <label><span data-i18n="field.printerName">打印机名称</span>
+              <input name="BAMBU_PRINTER_NAME">
+            </label>
+            <label><span data-i18n="field.printerIp">局域网同步：打印机 IP</span>
+              <input name="BAMBU_PRINTER_IP">
+            </label>
+            <label><span data-i18n="field.accessCode">局域网同步：访问码</span>
+              <input name="BAMBU_ACCESS_CODE" type="password" autocomplete="off" placeholder="保存后会隐藏" data-i18n-placeholder="placeholder.savedHidden">
+            </label>
+          </div>
+          <div class="buttons">
+            <button type="submit" data-i18n="button.saveBambu">保存 Bambu 设置</button>
+            <button id="resetApp" type="button" class="danger" data-i18n="button.reset">重置</button>
+          </div>
+        </form>
+
+        <div id="resetConfirm" class="confirm">
+          <p data-i18n="reset.description">只清空拓竹云登录和打印机设置，不会删除 Notion 配置或 Notion 数据。</p>
+          <label><span data-i18n="field.confirmation">二次确认</span>
+            <input id="resetConfirmText" autocomplete="off" placeholder="输入 重置" data-i18n-placeholder="placeholder.reset">
+          </label>
+          <div class="buttons">
+            <button id="confirmResetApp" type="button" class="danger" data-i18n="button.confirmReset">确认重置</button>
+            <button id="cancelResetApp" type="button" class="secondary" data-i18n="button.cancel">取消</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="notionPanel" class="panel" data-panel="notion">
+      <button class="panelHeader" type="button" data-open-panel="notion">
+        <span class="stepNo">2</span>
+        <span class="stepCopy">
+          <h2>Notion <em>Workspace</em></h2>
+          <span id="notionSummary" class="summary">等待配置 Notion 密钥和页面 ID</span>
+        </span>
+        <span id="notionPill" class="pill warn">待配置</span>
+        <span class="chevron">⌄</span>
+      </button>
+      <div class="panelBody">
+        <form id="notionForm">
+          <div class="grid">
+            <label><span data-i18n="field.notionToken">Notion 密钥</span>
+              <input name="NOTION_TOKEN" type="password" autocomplete="off" placeholder="保存后会隐藏" data-i18n-placeholder="placeholder.savedHidden">
+            </label>
+            <label><span data-i18n="field.notionTarget">Notion 页面/数据库 ID</span>
+              <input name="NOTION_DATA_SOURCE_ID" required>
+            </label>
+          </div>
+          <p class="inlineNote" data-i18n="notion.managedDatabases">数据库由系统自动创建和复用，普通配置不需要修改数据库名。请不要在 Notion 中重命名这些数据库，否则服务会把它们当成缺失并重新创建。</p>
+          <button type="submit" data-i18n="button.saveNotion">保存 Notion 配置</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="syncPanel" class="panel" data-panel="sync">
+      <button class="panelHeader" type="button" data-open-panel="sync">
+        <span class="stepNo">3</span>
+        <span class="stepCopy">
+          <h2>Sync <em>Runtime</em></h2>
+          <span id="syncSummary" class="summary">等待前两步完成</span>
+        </span>
+        <span id="syncPill" class="pill warn">未启动</span>
+        <span class="chevron">⌄</span>
+      </button>
+      <div class="panelBody">
+        <div id="startupProgress" class="progress" role="progressbar" aria-label="同步服务启动进度" data-i18n-aria-label="progress.aria" aria-valuemin="0" aria-valuemax="100">
+          <div class="progressHead">
+            <span id="startupProgressTitle">启动进度</span>
+            <span id="startupProgressMeta" class="progressMeta">等待状态</span>
+          </div>
+          <div class="progressTrack"><span id="startupProgressBar" class="progressFill"></span></div>
+          <div id="startupProgressSteps" class="progressSteps"></div>
+        </div>
+        <div id="status" class="status">加载中...</div>
+        <form id="syncForm">
+          <div class="switches">
+            <label class="switch">
+              <span class="switchCopy">
+                <strong data-i18n="switch.ams.title">AMS 数据</strong>
+                <small data-i18n="switch.ams.desc">当前料盘、RFID、余量和颜色</small>
+              </span>
+              <input name="AMS_SYNC_ENABLED" type="checkbox" value="true">
+              <span class="switchKnob" aria-hidden="true"></span>
+            </label>
+            <label class="switch">
+              <span class="switchCopy">
+                <strong data-i18n="switch.history.title">打印历史</strong>
+                <small data-i18n="switch.history.desc">Bambu Cloud 已完成任务记录</small>
+              </span>
+              <input name="PRINT_TASK_HISTORY_SYNC_ON_START" type="checkbox" value="true">
+              <span class="switchKnob" aria-hidden="true"></span>
+            </label>
+          </div>
+          <div class="grid">
+            <label><span data-i18n="field.pushInterval">同步周期（毫秒，10 分钟 = 600000）</span>
+              <input name="PUSHALL_INTERVAL_MS" inputmode="numeric" placeholder="600000">
+            </label>
+            <label><span data-i18n="field.historyCooldown">任务历史冷却（毫秒，5 分钟 = 300000）</span>
+              <input name="PRINT_TASK_HISTORY_MIN_INTERVAL_MS" inputmode="numeric" placeholder="300000">
+            </label>
+            <label><span data-i18n="field.dryRun">试运行模式</span>
+              <select name="DRY_RUN">
+                <option value="true" data-i18n="option.dryRunOn">开启：只预览，不写入 Notion</option>
+                <option value="false" data-i18n="option.dryRunOff">关闭：正式写入 Notion</option>
+              </select>
+            </label>
+          </div>
+          <div class="buttons">
+            <button type="submit" data-i18n="button.saveSync">保存同步设置</button>
+            <button id="manualSync" type="button" data-i18n="button.syncNow">立即同步</button>
+            <button id="resetTaskHistoryCheckpoint" type="button" class="secondary" data-i18n="button.resetCheckpoint">清空任务历史时间</button>
+            <button id="restart" type="button" class="secondary" data-i18n="button.restart">重启同步服务</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const statusEl = document.querySelector("#status");
+    const bambuSettingsForm = document.querySelector("#bambuSettingsForm");
+    const notionForm = document.querySelector("#notionForm");
+    const syncForm = document.querySelector("#syncForm");
+    const loginForm = document.querySelector("#loginForm");
+    const codeForm = document.querySelector("#codeForm");
+    const tfaForm = document.querySelector("#tfaForm");
+    const devicesEl = document.querySelector("#devices");
+    const bambuTokenBox = document.querySelector("#bambuTokenBox");
+    const startupProgressEl = document.querySelector("#startupProgress");
+    const startupProgressTitle = document.querySelector("#startupProgressTitle");
+    const startupProgressMeta = document.querySelector("#startupProgressMeta");
+    const startupProgressBar = document.querySelector("#startupProgressBar");
+    const startupProgressSteps = document.querySelector("#startupProgressSteps");
+    const bentoBambu = document.querySelector("#bentoBambu");
+    const bentoNotion = document.querySelector("#bentoNotion");
+    const bentoSync = document.querySelector("#bentoSync");
+    const heroPrimaryAction = document.querySelector("#heroPrimaryAction");
+    const heroSyncAction = document.querySelector("#heroSyncAction");
+    const resetConfirm = document.querySelector("#resetConfirm");
+    const resetConfirmText = document.querySelector("#resetConfirmText");
+    const panels = {
+      bambu: document.querySelector("#bambuPanel"),
+      notion: document.querySelector("#notionPanel"),
+      sync: document.querySelector("#syncPanel")
+    };
+    const NOTION_DATABASE_DEFAULTS = {
+      NOTION_AMS_DATABASE_NAME: "AMS 耗材",
+      NOTION_TASK_DATABASE_NAME: "打印记录",
+      NOTION_TASK_FILAMENT_DATABASE_NAME: "耗材用量明细",
+      NOTION_TASK_FILAMENT_SPEC_DATABASE_NAME: "耗材色卡",
+      NOTION_TASK_FILAMENT_COLOR_DATABASE_NAME: "颜色映射"
+    };
+    const TRANSLATIONS = {
+      zh: {
+        "language.switch": "切换语言",
+        "mode.switch": "显示模式",
+        "mode.default": "默认",
+        "mode.minimal": "极简",
+        "hero.kicker": "私有打印工作台",
+        "hero.copy": "把拓竹云、AMS 料盘和打印历史收拢到一个安静的 Notion 工作台。配置、同步、回填和运行状态都在这里完成。",
+        "hero.actions": "快捷操作",
+        "overview.aria": "同步状态概览",
+        "action.bambu": "账号与打印机",
+        "action.notion": "Notion 配置",
+        "action.sync": "同步控制",
+        "region.china": "中国区",
+        "region.global": "海外区",
+        "field.region": "区域",
+        "field.account": "账号邮箱或手机号",
+        "field.password": "密码",
+        "field.code": "验证码",
+        "field.tfaCode": "多因素验证码",
+        "field.syncMode": "同步方式",
+        "field.printerSerial": "打印机序列号",
+        "field.printerName": "打印机名称",
+        "field.printerIp": "局域网同步：打印机 IP",
+        "field.accessCode": "局域网同步：访问码",
+        "field.confirmation": "二次确认",
+        "field.notionToken": "Notion 密钥",
+        "field.notionTarget": "Notion 页面/数据库 ID",
+        "notion.managedDatabases": "数据库由系统自动创建和复用，普通配置不需要修改数据库名。请不要在 Notion 中重命名这些数据库，否则服务会把它们当成缺失并重新创建。",
+        "field.pushInterval": "同步周期（毫秒，10 分钟 = 600000）",
+        "field.historyCooldown": "任务历史冷却（毫秒，5 分钟 = 300000）",
+        "field.dryRun": "试运行模式",
+        "section.printerSettings": "打印机设置",
+        "button.loginBambu": "登录拓竹云",
+        "button.submitCode": "提交验证码",
+        "button.submitMfa": "提交 MFA",
+        "button.saveBambu": "保存 Bambu 设置",
+        "button.reset": "重置",
+        "button.confirmReset": "确认重置",
+        "button.cancel": "取消",
+        "button.saveNotion": "保存 Notion 配置",
+        "button.saveSync": "保存同步设置",
+        "button.syncNow": "立即同步",
+        "button.resetCheckpoint": "清空任务历史时间",
+        "button.restart": "重启同步服务",
+        "button.loginBambuShort": "登录拓竹云",
+        "button.configNotion": "配置 Notion",
+        "button.chooseSync": "选择同步内容",
+        "button.viewSync": "查看同步状态",
+        "button.syncQueued": "同步排队中",
+        "placeholder.savedHidden": "保存后会隐藏",
+        "placeholder.reset": "输入 重置",
+        "reset.description": "只清空拓竹云登录和打印机设置，不会删除 Notion 配置或 Notion 数据。",
+        "progress.aria": "同步服务启动进度",
+        "progress.initialTitle": "启动进度",
+        "progress.initialMeta": "等待状态",
+        "switch.ams.title": "AMS 数据",
+        "switch.ams.desc": "当前料盘、RFID、余量和颜色",
+        "switch.history.title": "打印历史",
+        "switch.history.desc": "Bambu Cloud 已完成任务记录",
+        "option.cloudSync": "云端同步",
+        "option.localSync": "局域网同步",
+        "option.dryRunOn": "开启：只预览，不写入 Notion",
+        "option.dryRunOff": "关闭：正式写入 Notion",
+        "state.on": "开启",
+        "state.off": "关闭",
+        "state.starting": "启动中",
+        "state.running": "运行中",
+        "state.notStarted": "未启动",
+        "state.connected": "已连接",
+        "state.disconnected": "未连接",
+        "state.configured": "已配置",
+        "state.pendingConfig": "待配置",
+        "state.loggedIn": "已登录",
+        "state.pendingLogin": "待登录",
+        "state.notEnabled": "未启用",
+        "state.pending": "待处理",
+        "summary.checkLogin": "检查登录状态...",
+        "summary.waitLogin": "等待登录拓竹云",
+        "summary.loggedIn": "已登录 {region} · {count} 台设备",
+        "summary.waitNotion": "等待 Notion 密钥和页面 ID",
+        "summary.configured": "已配置 · {id}",
+        "summary.waitPrevious": "等待前两步完成",
+        "summary.chooseSync": "请选择要同步的数据",
+        "summary.runningCloud": "运行中 · {status}",
+        "summary.runningHistory": "运行中 · 打印历史已开启",
+        "summary.starting": "启动中 · {phase}",
+        "bento.bambuChecking": "检查拓竹云登录状态...",
+        "bento.bambuWait": "等待登录拓竹云账号。",
+        "bento.bambuReady": "{region} · {count} 台设备可用",
+        "bento.notionWait": "等待 Notion integration 和目标页面。",
+        "bento.notionReady": "目标 ID …{id}",
+        "bento.syncWait": "等待启用同步。",
+        "bento.syncStarting": "启动中 · {phase}",
+        "bento.syncRunning": "运行中 · AMS {ams} · 打印历史 {history}",
+        "runtime.noService": "同步服务未启动",
+        "runtime.service": "服务",
+        "runtime.switches": "同步开关",
+        "runtime.ams": "AMS",
+        "runtime.printHistory": "打印历史",
+        "runtime.cloudConnection": "拓竹云连接",
+        "runtime.recentAms": "最近 AMS 同步",
+        "runtime.recentTrayCount": "最近耗材数",
+        "runtime.amsOff": "AMS 同步: 未开启",
+        "runtime.history": "任务历史总数",
+        "runtime.historySyncing": "同步中/未同步",
+        "runtime.records": "条",
+        "runtime.historyTo": "历史同步到",
+        "runtime.historyOff": "任务历史: 未开启",
+        "runtime.phase": "启动阶段",
+        "runtime.maintenance": "后台维护: 运行中",
+        "runtime.manualPending": "立即同步: 等待连接后执行",
+        "runtime.hint": "提示",
+        "overview.ams": "AMS",
+        "overview.history": "历史总数",
+        "overview.waiting": "等待",
+        "overview.off": "关闭",
+        "overview.skip": "跳过",
+        "overview.configReady": "配置完成",
+        "overview.syncReady": "可同步",
+        "overview.items": "{count}个",
+        "overview.records": "{count}条",
+        "phase.loadConfig": "加载配置",
+        "phase.initNotion": "初始化 Notion",
+        "phase.connectPrinter": "连接打印机",
+        "phase.initializing": "初始化",
+        "startup.step.config": "配置",
+        "startup.step.notion": "Notion",
+        "startup.step.printer": "打印机",
+        "startup.step.ready": "可同步",
+        "startup.step.maintenance": "后台维护",
+        "progress.waitChooseTitle": "等待选择同步内容",
+        "progress.waitChooseMeta": "AMS 和打印历史均未开启",
+        "progress.syncStarting": "同步服务启动中",
+        "progress.waitPrinter": "等待打印机连接",
+        "progress.connectAfterManual": "连接后执行立即同步",
+        "progress.connectingPrinter": "正在连接打印机",
+        "progress.serviceAvailable": "同步服务可用",
+        "progress.maintenance": "后台维护中",
+        "progress.serviceRunning": "同步服务运行中",
+        "progress.allReady": "全部就绪",
+        "progress.pending": "同步服务待处理",
+        "progress.waitStart": "等待启动",
+        "progress.waitPrevious": "等待前两步完成",
+        "device.serial": "序列号",
+        "device.model": "型号",
+        "device.use": "使用这台打印机",
+        "token.uid": "账号 UID",
+        "token.broker": "消息服务器",
+        "token.savedAt": "登录凭据保存时间",
+        "status.loading": "加载中...",
+        "status.saveBambu": "保存 Bambu 设置中...",
+        "status.saveNotion": "保存 Notion 配置中...",
+        "status.saveSync": "保存同步设置中...",
+        "status.requestSync": "已请求立即同步...",
+        "status.requestSyncDone": "已请求立即同步。",
+        "status.resetCheckpoint": "已清空任务历史时间。下次触发历史同步会从最早任务开始。",
+        "status.restart": "正在重启同步服务...",
+        "status.resetPrompt": "输入“重置”后再确认重置拓竹云登录。不会删除 Notion 数据。",
+        "status.resetCanceled": "已取消重置。",
+        "status.resetting": "正在重置拓竹云登录...",
+        "status.resetDone": "已清空拓竹云登录和打印机设置，可以重新登录。",
+        "status.loggingIn": "正在登录拓竹云...",
+        "status.smsSent": "已发送短信验证码。",
+        "status.emailSent": "已发送邮箱验证码。",
+        "status.needTfa": "需要多因素验证码。"
+      },
+      en: {
+        "language.switch": "Switch language",
+        "mode.switch": "Display mode",
+        "mode.default": "Default",
+        "mode.minimal": "Minimal",
+        "hero.kicker": "Private printer operations",
+        "hero.copy": "Bring Bambu Cloud, AMS spools, and print history into a calm Notion workspace. Configure, sync, backfill, and monitor the service from one place.",
+        "hero.actions": "Quick actions",
+        "overview.aria": "Sync status overview",
+        "action.bambu": "Account & printer",
+        "action.notion": "Notion setup",
+        "action.sync": "Sync controls",
+        "region.china": "China",
+        "region.global": "Global",
+        "field.region": "Region",
+        "field.account": "Email or phone",
+        "field.password": "Password",
+        "field.code": "Verification code",
+        "field.tfaCode": "MFA code",
+        "field.syncMode": "Sync mode",
+        "field.printerSerial": "Printer serial",
+        "field.printerName": "Printer name",
+        "field.printerIp": "LAN sync: printer IP",
+        "field.accessCode": "LAN sync: access code",
+        "field.confirmation": "Confirmation",
+        "field.notionToken": "Notion token",
+        "field.notionTarget": "Notion page/database ID",
+        "notion.managedDatabases": "Databases are created and reused automatically. The standard setup does not need database-name edits. Do not rename these databases in Notion, or the service will treat them as missing and create new ones.",
+        "field.pushInterval": "Sync interval (ms, 10 min = 600000)",
+        "field.historyCooldown": "Print history cooldown (ms, 5 min = 300000)",
+        "field.dryRun": "Dry-run mode",
+        "section.printerSettings": "Printer settings",
+        "button.loginBambu": "Log in to Bambu Cloud",
+        "button.submitCode": "Submit code",
+        "button.submitMfa": "Submit MFA",
+        "button.saveBambu": "Save Bambu settings",
+        "button.reset": "Reset",
+        "button.confirmReset": "Confirm reset",
+        "button.cancel": "Cancel",
+        "button.saveNotion": "Save Notion setup",
+        "button.saveSync": "Save sync settings",
+        "button.syncNow": "Sync now",
+        "button.resetCheckpoint": "Clear history checkpoint",
+        "button.restart": "Restart sync service",
+        "button.loginBambuShort": "Log in to Bambu",
+        "button.configNotion": "Set up Notion",
+        "button.chooseSync": "Choose sync data",
+        "button.viewSync": "View sync status",
+        "button.syncQueued": "Sync queued",
+        "placeholder.savedHidden": "Hidden after saving",
+        "placeholder.reset": "Type 重置",
+        "reset.description": "This only clears Bambu Cloud login and printer settings. It will not delete Notion settings or Notion data.",
+        "progress.aria": "Sync service startup progress",
+        "progress.initialTitle": "Startup progress",
+        "progress.initialMeta": "Waiting",
+        "switch.ams.title": "AMS data",
+        "switch.ams.desc": "Current trays, RFID, remaining amount, and colors",
+        "switch.history.title": "Print history",
+        "switch.history.desc": "Completed Bambu Cloud print jobs",
+        "option.cloudSync": "Cloud sync",
+        "option.localSync": "LAN sync",
+        "option.dryRunOn": "On: preview only, do not write to Notion",
+        "option.dryRunOff": "Off: write to Notion",
+        "state.on": "On",
+        "state.off": "Off",
+        "state.starting": "Starting",
+        "state.running": "Running",
+        "state.notStarted": "Not started",
+        "state.connected": "Connected",
+        "state.disconnected": "Disconnected",
+        "state.configured": "Configured",
+        "state.pendingConfig": "Needs setup",
+        "state.loggedIn": "Logged in",
+        "state.pendingLogin": "Login needed",
+        "state.notEnabled": "Disabled",
+        "state.pending": "Needs attention",
+        "summary.checkLogin": "Checking login status...",
+        "summary.waitLogin": "Waiting for Bambu Cloud login",
+        "summary.loggedIn": "Logged in to {region} · {count} device(s)",
+        "summary.waitNotion": "Waiting for Notion token and page ID",
+        "summary.configured": "Configured · {id}",
+        "summary.waitPrevious": "Waiting for previous steps",
+        "summary.chooseSync": "Choose what to sync",
+        "summary.runningCloud": "Running · {status}",
+        "summary.runningHistory": "Running · print history enabled",
+        "summary.starting": "Starting · {phase}",
+        "bento.bambuChecking": "Checking Bambu Cloud login...",
+        "bento.bambuWait": "Waiting for Bambu Cloud login.",
+        "bento.bambuReady": "{region} · {count} device(s) available",
+        "bento.notionWait": "Waiting for Notion integration and target page.",
+        "bento.notionReady": "Target ID …{id}",
+        "bento.syncWait": "Waiting for sync to be enabled.",
+        "bento.syncStarting": "Starting · {phase}",
+        "bento.syncRunning": "Running · AMS {ams} · print history {history}",
+        "runtime.noService": "Sync service is not started",
+        "runtime.service": "Service",
+        "runtime.switches": "Sync switches",
+        "runtime.ams": "AMS",
+        "runtime.printHistory": "print history",
+        "runtime.cloudConnection": "Bambu Cloud connection",
+        "runtime.recentAms": "Recent AMS sync",
+        "runtime.recentTrayCount": "Recent filament count",
+        "runtime.amsOff": "AMS sync: off",
+        "runtime.history": "Print history total",
+        "runtime.historySyncing": "syncing/not synced",
+        "runtime.records": "records",
+        "runtime.historyTo": "History synced to",
+        "runtime.historyOff": "Print history: off",
+        "runtime.phase": "Startup phase",
+        "runtime.maintenance": "Maintenance: running",
+        "runtime.manualPending": "Sync now: waiting for connection",
+        "runtime.hint": "Hint",
+        "overview.ams": "AMS",
+        "overview.history": "History total",
+        "overview.waiting": "Waiting",
+        "overview.off": "Off",
+        "overview.skip": "Skip",
+        "overview.configReady": "Config ready",
+        "overview.syncReady": "Sync ready",
+        "overview.items": "{count}",
+        "overview.records": "{count}",
+        "phase.loadConfig": "Loading config",
+        "phase.initNotion": "Initializing Notion",
+        "phase.connectPrinter": "Connecting printer",
+        "phase.initializing": "Initializing",
+        "startup.step.config": "Config",
+        "startup.step.notion": "Notion",
+        "startup.step.printer": "Printer",
+        "startup.step.ready": "Ready",
+        "startup.step.maintenance": "Maintenance",
+        "progress.waitChooseTitle": "Choose sync data",
+        "progress.waitChooseMeta": "AMS and print history are both off",
+        "progress.syncStarting": "Sync service is starting",
+        "progress.waitPrinter": "Waiting for printer connection",
+        "progress.connectAfterManual": "Will sync after connection",
+        "progress.connectingPrinter": "Connecting printer",
+        "progress.serviceAvailable": "Sync service is available",
+        "progress.maintenance": "Running maintenance",
+        "progress.serviceRunning": "Sync service is running",
+        "progress.allReady": "All ready",
+        "progress.pending": "Sync service needs attention",
+        "progress.waitStart": "Waiting to start",
+        "progress.waitPrevious": "Waiting for previous steps",
+        "device.serial": "Serial",
+        "device.model": "Model",
+        "device.use": "Use this printer",
+        "token.uid": "Account UID",
+        "token.broker": "Message broker",
+        "token.savedAt": "Credential saved at",
+        "status.loading": "Loading...",
+        "status.saveBambu": "Saving Bambu settings...",
+        "status.saveNotion": "Saving Notion setup...",
+        "status.saveSync": "Saving sync settings...",
+        "status.requestSync": "Requesting sync now...",
+        "status.requestSyncDone": "Sync requested.",
+        "status.resetCheckpoint": "Print history checkpoint cleared. The next history sync will start from the earliest available task.",
+        "status.restart": "Restarting sync service...",
+        "status.resetPrompt": "Type “重置” to confirm resetting Bambu Cloud login. Notion data will not be deleted.",
+        "status.resetCanceled": "Reset canceled.",
+        "status.resetting": "Resetting Bambu Cloud login...",
+        "status.resetDone": "Bambu Cloud login and printer settings were cleared. You can log in again.",
+        "status.loggingIn": "Logging in to Bambu Cloud...",
+        "status.smsSent": "SMS verification code sent.",
+        "status.emailSent": "Email verification code sent.",
+        "status.needTfa": "Multi-factor code required."
+      }
+    };
+    const SERVER_TEXT_EN = {
+      "同步服务正在启动，连接打印机后会自动执行这次同步。": "The sync service is starting. This sync will run after the printer connects.",
+      "请先打开至少一个同步开关": "Enable at least one sync switch first.",
+      "AMS 同步服务尚未运行": "The AMS sync service is not running yet.",
+      "AMS 同步正在等待拓竹云连接；连接后会自动执行这次同步。": "AMS sync is waiting for Bambu Cloud connection. It will run automatically after connecting.",
+      "已请求打印机立即回报完整 AMS 状态。": "Requested the printer to report the full AMS state.",
+      "已开始同步打印历史。": "Print history sync has started.",
+      "请输入“重置”确认操作": "Type “重置” to confirm this reset."
+    };
+    let pendingTfaKey = "";
+    let pendingLoginStep = "";
+    let selectedPanel = "";
+    function readStoredLang() {
+      try {
+        return localStorage.getItem("adminLang");
+      } catch {
+        return "";
+      }
+    }
+    function saveStoredLang(lang) {
+      try {
+        localStorage.setItem("adminLang", lang);
+      } catch {}
+    }
+    function readStoredMode() {
+      try {
+        return localStorage.getItem("adminDisplayMode");
+      } catch {
+        return "";
+      }
+    }
+    function saveStoredMode(mode) {
+      try {
+        localStorage.setItem("adminDisplayMode", mode);
+      } catch {}
+    }
+    let currentLang = readStoredLang() === "en" ? "en" : "zh";
+    let currentMode = readStoredMode() === "minimal" ? "minimal" : "default";
+    let lastStatusData = null;
+    let noticeUntil = 0;
+
+    function t(key) {
+      return TRANSLATIONS[currentLang]?.[key] || TRANSLATIONS.zh[key] || key;
+    }
+
+    function tr(key, values = {}) {
+      return t(key).replace(/{([a-zA-Z0-9_]+)}/g, (_match, name) => values[name] ?? "");
+    }
+
+    function translateServerText(text) {
+      if (!text || currentLang !== "en") return text || "";
+      let translated = String(text);
+      for (const [source, target] of Object.entries(SERVER_TEXT_EN)) {
+        translated = translated.split(source).join(target);
+      }
+      return translated;
+    }
+
+    function applyLanguage() {
+      document.documentElement.lang = currentLang === "en" ? "en" : "zh-CN";
+      for (const element of document.querySelectorAll("[data-i18n]")) {
+        element.textContent = t(element.dataset.i18n);
+      }
+      for (const element of document.querySelectorAll("[data-i18n-placeholder]")) {
+        element.placeholder = t(element.dataset.i18nPlaceholder);
+      }
+      for (const element of document.querySelectorAll("[data-i18n-aria-label]")) {
+        element.setAttribute("aria-label", t(element.dataset.i18nAriaLabel));
+      }
+      for (const button of document.querySelectorAll("[data-lang]")) {
+        const active = button.dataset.lang === currentLang;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+      }
+    }
+
+    function setLanguage(lang) {
+      currentLang = lang === "en" ? "en" : "zh";
+      saveStoredLang(currentLang);
+      applyLanguage();
+      if (lastStatusData) renderAll(lastStatusData, false);
+    }
+
+    function setDisplayMode(mode) {
+      currentMode = mode === "minimal" ? "minimal" : "default";
+      saveStoredMode(currentMode);
+      applyDisplayMode(lastStatusData);
+    }
+
+    function setStatus(text, kind = "", persist = false) {
+      const message = translateServerText(text);
+      statusEl.className = "status" + (message ? " active" : "") + (kind ? " " + kind : "");
+      statusEl.textContent = message;
+      noticeUntil = message && !persist ? Date.now() + 9000 : 0;
+    }
+
+    function clearTransientStatus() {
+      if (noticeUntil && Date.now() > noticeUntil) setStatus("");
+    }
+
+    function formValues(form) {
+      const values = Object.fromEntries(new FormData(form).entries());
+      for (const input of form.querySelectorAll('input[type="checkbox"][name]')) {
+        values[input.name] = input.checked ? "true" : "false";
+      }
+      return values;
+    }
+
+    function setFormValues(form, config) {
+      for (const [key, value] of Object.entries(config || {})) {
+        const input = form.elements[key];
+        if (!input) continue;
+        if (input.type === "checkbox") input.checked = value === true || value === "true";
+        else input.value = value;
+      }
+    }
+
+    function setPill(id, text, kind) {
+      const pill = document.querySelector("#" + id);
+      pill.textContent = text;
+      pill.className = "pill " + kind;
+    }
+
+    function initRevealAnimations() {
+      const groups = document.querySelectorAll(".revealGroup");
+      if (!groups.length) return;
+      if (!("IntersectionObserver" in window)) {
+        for (const group of groups) group.classList.add("is-visible");
+        return;
+      }
+      const observer = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          entry.target.classList.add("is-visible");
+          observer.unobserve(entry.target);
+        }
+      }, { threshold: 0.22 });
+      for (const group of groups) observer.observe(group);
+    }
+
+    function openPanel(name, manual = false) {
+      const panel = panels[name];
+      if (!panel) return;
+      if (currentMode === "minimal" && manual) return;
+      if (manual) {
+        panel.classList.toggle("open");
+        selectedPanel = "__manual__";
+        return;
+      }
+      panel.classList.add("open");
+    }
+
+    function navigateToPanel(name) {
+      const panel = panels[name];
+      if (!panel) return;
+      panel.classList.add("open");
+      selectedPanel = "__manual__";
+      requestAnimationFrame(() => {
+        panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+
+    function hasNotionConfig(config) {
+      return Boolean(config.NOTION_TOKEN && config.NOTION_DATA_SOURCE_ID);
+    }
+
+    function hasPrinterConfig(data) {
+      const config = data?.config || {};
+      if (config.BAMBU_CONNECTION_MODE === "local") {
+        return Boolean(config.BAMBU_PRINTER_SERIAL && config.BAMBU_PRINTER_IP && config.BAMBU_ACCESS_CODE);
+      }
+      return Boolean(data?.bambuToken && config.BAMBU_PRINTER_SERIAL);
+    }
+
+    function minimalPanelForData(data) {
+      if (!hasPrinterConfig(data)) return "bambu";
+      if (!hasNotionConfig(data?.config || {})) return "notion";
+      return "sync";
+    }
+
+    function applyDisplayMode(data) {
+      const minimal = currentMode === "minimal";
+      document.body.classList.toggle("mode-minimal", minimal);
+      for (const button of document.querySelectorAll("[data-mode]")) {
+        const active = button.dataset.mode === currentMode;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+      }
+
+      for (const panel of Object.values(panels)) panel.classList.remove("activeStep");
+      if (!minimal || !data) return;
+
+      const target = minimalPanelForData(data);
+      for (const [name, panel] of Object.entries(panels)) {
+        const active = name === target;
+        panel.classList.toggle("activeStep", active);
+        panel.classList.toggle("open", active);
+      }
+    }
+
+    function regionLabel(region) {
+      if (region === "china") return t("region.china");
+      if (region === "global") return t("region.global");
+      return region || "-";
+    }
+
+    function chooseDefaultPanel(data) {
+      if (selectedPanel) return;
+      if (!data.bambuToken) {
+        openPanel("bambu");
+      } else if (!hasNotionConfig(data.config || {})) {
+        openPanel("notion");
+      } else {
+        openPanel("sync");
+      }
+    }
+
+    function nextPanelForData(data) {
+      if (!data.bambuToken) return "bambu";
+      if (!hasNotionConfig(data.config || {})) return "notion";
+      return "sync";
+    }
+
+    function enabledText(value) {
+      return value ? t("state.on") : t("state.off");
+    }
+
+    function phaseText(phase) {
+      if (phase === "加载配置") return t("phase.loadConfig");
+      if (phase === "初始化 Notion") return t("phase.initNotion");
+      if (phase === "连接打印机") return t("phase.connectPrinter");
+      if (phase === "初始化" || phase === "启动中") return t("phase.initializing");
+      return phase || t("phase.initializing");
+    }
+
+    function startupSteps(runtime = {}, flags = { ams: false, printHistory: false }) {
+      const printerText = flags.ams
+        ? runtime.bambu?.connected
+          ? t("state.connected")
+          : t("overview.waiting")
+        : t("overview.skip");
+      const syncText = [
+        flags.ams ? t("overview.ams") + " " + (runtime.lastTrayCount ? tr("overview.items", { count: runtime.lastTrayCount }) : t("overview.waiting")) : "",
+        flags.printHistory ? t("overview.history") + " " + (runtime.lastTaskHistorySyncAt ? tr("overview.records", { count: runtime.lastTaskHistoryCount ?? 0 }) : t("overview.waiting")) : ""
+      ].filter(Boolean).join(" · ") || t("overview.off");
+      const maintenanceText = runtime.maintenanceRunning ? t("state.running") : runtime.running ? t("overview.syncReady") : t("overview.waiting");
+      return [
+        t("overview.configReady"),
+        t("startup.step.notion") + " " + t("state.configured"),
+        t("startup.step.printer") + " " + printerText,
+        syncText,
+        t("startup.step.maintenance") + " " + maintenanceText
+      ];
+    }
+
+    function runtimeText(runtime, config = {}) {
+      if (!runtime) return t("runtime.noService");
+      const flags = runtime.enabledSyncs || {
+        ams: config.AMS_SYNC_ENABLED === "true",
+        printHistory: config.PRINT_TASK_HISTORY_SYNC_ON_START === "true"
+      };
+      const lines = [
+        t("runtime.service") + ": " + (runtime.starting ? t("state.starting") : runtime.running ? t("state.running") : t("state.notStarted")),
+        t("runtime.switches") + ": " + t("runtime.ams") + " " + enabledText(flags.ams) + " · " + t("runtime.printHistory") + " " + enabledText(flags.printHistory)
+      ];
+      if (flags.ams) {
+        lines.push(
+          t("runtime.cloudConnection") + ": " + (runtime.bambu?.connected ? t("state.connected") : t("state.disconnected")),
+          t("runtime.recentAms") + ": " + (runtime.lastSyncAt ? new Date(runtime.lastSyncAt).toLocaleString() : "-"),
+          t("runtime.recentTrayCount") + ": " + (runtime.lastTrayCount ?? 0)
+        );
+      } else {
+        lines.push(t("runtime.amsOff"));
+      }
+      if (flags.printHistory) {
+        lines.push(
+          t("runtime.history") + ": " + (runtime.lastTaskHistorySyncAt ? (runtime.lastTaskHistoryCount ?? 0) + " " + t("runtime.records") + " · " + new Date(runtime.lastTaskHistorySyncAt).toLocaleString() : t("runtime.historySyncing")),
+          t("runtime.historyTo") + ": " + (runtime.lastTaskHistoryCheckpointAt ? new Date(runtime.lastTaskHistoryCheckpointAt).toLocaleString() : "-")
+        );
+      } else {
+        lines.push(t("runtime.historyOff"));
+      }
+      if (runtime.startupPhase) lines.splice(1, 0, t("runtime.phase") + ": " + phaseText(runtime.startupPhase));
+      if (runtime.maintenanceRunning) lines.push(t("runtime.maintenance"));
+      if (runtime.pendingManualSync) lines.push(t("runtime.manualPending"));
+      if (runtime.lastError) lines.push(t("runtime.hint") + ": " + translateServerText(runtime.lastError));
+      return lines.join("\n");
+    }
+
+    function statusKind(runtime) {
+      if (runtime?.starting) return "warn";
+      if (runtime?.running) return "ok";
+      if (!runtime?.lastError) return "warn";
+      if (runtime.lastError.startsWith("Missing required env:") || runtime.lastError.startsWith("Cannot read Bambu cloud token file")) return "warn";
+      return "bad";
+    }
+
+    function startupProgressState(runtime) {
+      const flags = runtime?.enabledSyncs || { ams: false, printHistory: false };
+      if (!flags.ams && !flags.printHistory) {
+        return {
+          title: t("progress.waitChooseTitle"),
+          meta: t("progress.waitChooseMeta"),
+          percent: 0,
+          activeIndex: 0,
+          doneUntil: -1,
+          kind: "warn"
+        };
+      }
+
+      if (runtime?.starting) {
+        const phase = runtime.startupPhase || "启动中";
+        const activeIndex = phase === "初始化 Notion" ? 1 : phase === "连接打印机" ? 2 : 0;
+        return {
+          title: t("progress.syncStarting"),
+          meta: phaseText(phase),
+          percent: [16, 42, 66][activeIndex],
+          activeIndex,
+          doneUntil: activeIndex - 1,
+          kind: "warn"
+        };
+      }
+
+      if (runtime?.running) {
+        if (!runtime.bambu?.connected) {
+          return {
+            title: t("progress.waitPrinter"),
+            meta: runtime.pendingManualSync ? t("progress.connectAfterManual") : t("progress.connectingPrinter"),
+            percent: 72,
+            activeIndex: 2,
+            doneUntil: 1,
+            kind: "warn"
+          };
+        }
+
+        if (runtime.maintenanceRunning) {
+          return {
+            title: t("progress.serviceAvailable"),
+            meta: t("progress.maintenance"),
+            percent: 88,
+            activeIndex: 4,
+            doneUntil: 3,
+            kind: "warn"
+          };
+        }
+
+        return {
+          title: t("progress.serviceRunning"),
+          meta: t("progress.allReady"),
+          percent: 100,
+          activeIndex: 4,
+          doneUntil: 4,
+          kind: "ok"
+        };
+      }
+
+      const kind = statusKind(runtime);
+      return {
+        title: runtime?.lastError ? t("progress.pending") : t("progress.waitStart"),
+        meta: runtime?.lastError ? translateServerText(runtime.lastError) : t("progress.waitPrevious"),
+        percent: 0,
+        activeIndex: 0,
+        doneUntil: -1,
+        failedIndex: kind === "bad" ? 0 : -1,
+        kind
+      };
+    }
+
+    function renderStartupProgress(runtime, flags) {
+      const state = startupProgressState(runtime || {});
+      startupProgressEl.className = "progress " + state.kind;
+      startupProgressEl.setAttribute("aria-valuenow", String(state.percent));
+      startupProgressTitle.textContent = state.title;
+      startupProgressMeta.textContent = state.meta;
+      startupProgressBar.style.width = state.percent + "%";
+      startupProgressSteps.innerHTML = "";
+
+      startupSteps(runtime || {}, flags).forEach((label, index) => {
+        const item = document.createElement("div");
+        let className = "progressStep";
+        if (index <= state.doneUntil) className += " done";
+        else if (index === state.activeIndex) className += " active";
+        if (index === state.failedIndex) className += " bad";
+        item.className = className;
+
+        const dot = document.createElement("span");
+        dot.className = "progressDot";
+        const text = document.createElement("span");
+        text.textContent = label;
+        item.append(dot, text);
+        startupProgressSteps.appendChild(item);
+      });
+    }
+
+    function appendLine(parent, labelKey, value, codeValue = false) {
+      const span = document.createElement("span");
+      const label = t(labelKey);
+      span.append(label + ": ");
+      if (codeValue) {
+        const code = document.createElement("code");
+        code.textContent = value || "";
+        span.appendChild(code);
+      } else {
+        span.append(value || "-");
+      }
+      parent.appendChild(span);
+    }
+
+    async function api(path, body) {
+      const res = await fetch(path, {
+        method: body ? "POST" : "GET",
+        headers: body ? { "Content-Type": "application/json" } : {},
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Request failed");
+      return data;
+    }
+
+    function renderDevices(devices = []) {
+      devicesEl.innerHTML = "";
+      if (devices.length === 0) return;
+
+      for (const device of devices) {
+        const div = document.createElement("div");
+        div.className = "device";
+        const title = document.createElement("strong");
+        title.textContent = device.name || "Bambu Printer";
+        div.appendChild(title);
+        appendLine(div, "device.serial", device.dev_id || "", true);
+        appendLine(div, "device.model", device.model || "-");
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "secondary";
+        button.textContent = t("device.use");
+        button.addEventListener("click", async () => {
+          try {
+            await api("/api/config", {
+              BAMBU_PRINTER_SERIAL: device.dev_id || "",
+              BAMBU_PRINTER_NAME: device.name || ""
+            });
+            selectedPanel = "";
+            await refresh();
+          } catch (error) {
+            setStatus(error.message, "bad");
+          }
+        });
+        div.appendChild(button);
+        devicesEl.appendChild(div);
+      }
+    }
+
+    function renderBambu(data) {
+      const token = data.bambuToken;
+      const config = data.config || {};
+      const ready = Boolean(token);
+      if (ready) {
+        pendingLoginStep = "";
+        pendingTfaKey = "";
+      }
+      document.querySelector("#bambuSummary").textContent = ready
+        ? tr("summary.loggedIn", { region: regionLabel(token.region), count: (token.devices || []).length })
+        : t("summary.waitLogin");
+      setPill("bambuPill", ready ? t("state.loggedIn") : t("state.pendingLogin"), ready ? "ok" : "warn");
+      loginForm.hidden = ready;
+      codeForm.hidden = ready || pendingLoginStep !== "code";
+      tfaForm.hidden = ready || pendingLoginStep !== "tfa";
+      bambuTokenBox.hidden = !ready;
+      bambuTokenBox.textContent = ready
+        ? t("token.uid") + ": " + (token.uid || "-") + "\n" + t("token.broker") + ": " + (token.mqttBroker || "-") + "\n" + t("token.savedAt") + ": " + (token.savedAt || "-")
+        : "";
+      bentoBambu.textContent = ready
+        ? tr("bento.bambuReady", { region: regionLabel(token.region), count: (token.devices || []).length })
+        : t("bento.bambuWait");
+      setFormValues(bambuSettingsForm, config);
+      renderDevices(token?.devices || []);
+    }
+
+    function renderNotion(data) {
+      const config = data.config || {};
+      const ready = hasNotionConfig(config);
+      document.querySelector("#notionSummary").textContent = ready
+        ? tr("summary.configured", { id: (config.NOTION_DATA_SOURCE_ID || "").slice(-12) })
+        : t("summary.waitNotion");
+      bentoNotion.textContent = ready
+        ? tr("bento.notionReady", { id: (config.NOTION_DATA_SOURCE_ID || "").slice(-12) })
+        : t("bento.notionWait");
+      setPill("notionPill", ready ? t("state.configured") : t("state.pendingConfig"), ready ? "ok" : "warn");
+      setFormValues(notionForm, config);
+    }
+
+    function renderSync(data) {
+      const runtime = data.runtime || {};
+      const config = data.config || {};
+      const flags = runtime.enabledSyncs || {
+        ams: config.AMS_SYNC_ENABLED === "true",
+        printHistory: config.PRINT_TASK_HISTORY_SYNC_ON_START === "true"
+      };
+      setFormValues(syncForm, config);
+      renderStartupProgress(runtime, flags);
+      if (runtime.lastError) setStatus(runtime.lastError, statusKind(runtime), true);
+      else if (noticeUntil) clearTransientStatus();
+      else setStatus("");
+      bentoSync.textContent = runtime.starting
+        ? tr("bento.syncStarting", { phase: phaseText(runtime.startupPhase || "初始化") })
+        : runtime.running
+          ? tr("bento.syncRunning", { ams: enabledText(flags.ams), history: enabledText(flags.printHistory) })
+          : translateServerText(runtime.lastError) || t("bento.syncWait");
+      if (runtime.starting) {
+        document.querySelector("#syncSummary").textContent = tr("summary.starting", { phase: phaseText(runtime.startupPhase || "初始化") });
+        setPill("syncPill", t("state.starting"), "warn");
+      } else if (!flags.ams && !flags.printHistory) {
+        document.querySelector("#syncSummary").textContent = t("summary.chooseSync");
+        setPill("syncPill", t("state.notEnabled"), "warn");
+      } else if (runtime.running) {
+        document.querySelector("#syncSummary").textContent = flags.ams
+          ? tr("summary.runningCloud", { status: runtime.bambu?.connected ? t("state.connected") : t("state.disconnected") })
+          : t("summary.runningHistory");
+        setPill("syncPill", t("state.running"), "ok");
+      } else if (runtime.lastError) {
+        document.querySelector("#syncSummary").textContent = translateServerText(runtime.lastError);
+        setPill("syncPill", t("state.pending"), statusKind(runtime));
+      } else {
+        document.querySelector("#syncSummary").textContent = t("summary.waitPrevious");
+        setPill("syncPill", t("state.notStarted"), "warn");
+      }
+    }
+
+    function renderHeroActions(data) {
+      const runtime = data.runtime || {};
+      const config = data.config || {};
+      const flags = runtime.enabledSyncs || {
+        ams: config.AMS_SYNC_ENABLED === "true",
+        printHistory: config.PRINT_TASK_HISTORY_SYNC_ON_START === "true"
+      };
+      const target = nextPanelForData(data);
+      heroPrimaryAction.dataset.openPanel = target;
+      heroPrimaryAction.textContent =
+        target === "bambu" ? t("button.loginBambuShort") : target === "notion" ? t("button.configNotion") : !flags.ams && !flags.printHistory ? t("button.chooseSync") : t("button.viewSync");
+      heroSyncAction.disabled = false;
+      heroSyncAction.textContent = runtime.pendingManualSync ? t("button.syncQueued") : t("button.syncNow");
+    }
+
+    async function requestManualSync() {
+      try {
+        setStatus(t("status.requestSync"), "warn");
+        const result = await api("/api/sync", {});
+        setStatus(result.message || t("status.requestSyncDone"), result.pending ? "warn" : "ok");
+        setTimeout(refresh, 1500);
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    }
+
+    async function requestManualSyncFromShortcut() {
+      navigateToPanel("sync");
+      await requestManualSync();
+    }
+
+    function renderAll(data, choosePanel = true) {
+      renderBambu(data);
+      renderNotion(data);
+      renderSync(data);
+      renderHeroActions(data);
+      applyDisplayMode(data);
+      if (choosePanel) chooseDefaultPanel(data);
+    }
+
+    async function refresh() {
+      const data = await api("/api/status");
+      lastStatusData = data;
+      renderAll(data);
+    }
+
+    for (const button of document.querySelectorAll("[data-open-panel]")) {
+      button.addEventListener("click", () => {
+        if (button.classList.contains("panelHeader")) openPanel(button.dataset.openPanel, true);
+        else navigateToPanel(button.dataset.openPanel);
+      });
+    }
+
+    for (const button of document.querySelectorAll("[data-lang]")) {
+      button.addEventListener("click", () => setLanguage(button.dataset.lang));
+    }
+
+    for (const button of document.querySelectorAll("[data-mode]")) {
+      button.addEventListener("click", () => setDisplayMode(button.dataset.mode));
+    }
+
+    bambuSettingsForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        setStatus(t("status.saveBambu"), "warn");
+        await api("/api/config", formValues(bambuSettingsForm));
+        selectedPanel = "";
+        await refresh();
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    });
+
+    notionForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        setStatus(t("status.saveNotion"), "warn");
+        await api("/api/config", { ...formValues(notionForm), ...NOTION_DATABASE_DEFAULTS });
+        selectedPanel = "";
+        await refresh();
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    });
+
+    syncForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        setStatus(t("status.saveSync"), "warn");
+        await api("/api/config", formValues(syncForm));
+        selectedPanel = "sync";
+        await refresh();
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    });
+
+    document.querySelector("#manualSync").addEventListener("click", requestManualSync);
+    heroSyncAction.addEventListener("click", requestManualSyncFromShortcut);
+
+    document.querySelector("#resetTaskHistoryCheckpoint").addEventListener("click", async () => {
+      try {
+        setStatus(t("status.resetCheckpoint"), "warn");
+        await api("/api/task-history/checkpoint/reset", {});
+        selectedPanel = "sync";
+        await refresh();
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    });
+
+    document.querySelector("#restart").addEventListener("click", async () => {
+      try {
+        setStatus(t("status.restart"), "warn");
+        await api("/api/restart", {});
+        selectedPanel = "sync";
+        await refresh();
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    });
+
+    document.querySelector("#resetApp").addEventListener("click", () => {
+      resetConfirm.classList.add("active");
+      resetConfirmText.value = "";
+      resetConfirmText.focus();
+      setStatus(t("status.resetPrompt"), "warn");
+    });
+
+    document.querySelector("#cancelResetApp").addEventListener("click", () => {
+      resetConfirm.classList.remove("active");
+      resetConfirmText.value = "";
+      setStatus(t("status.resetCanceled"), "warn");
+    });
+
+    document.querySelector("#confirmResetApp").addEventListener("click", async () => {
+      const confirmation = resetConfirmText.value.trim();
+      try {
+        setStatus(t("status.resetting"), "warn");
+        await api("/api/bambu/reset", { confirmation });
+        loginForm.reset();
+        codeForm.reset();
+        tfaForm.reset();
+        pendingLoginStep = "";
+        pendingTfaKey = "";
+        resetConfirm.classList.remove("active");
+        resetConfirmText.value = "";
+        selectedPanel = "bambu";
+        await refresh();
+        setStatus(t("status.resetDone"), "warn");
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    });
+
+    loginForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        setStatus(t("status.loggingIn"), "warn");
+        const data = await api("/api/bambu/login", formValues(loginForm));
+        if (data.needsCode) {
+          pendingLoginStep = "code";
+          selectedPanel = "bambu";
+          codeForm.hidden = false;
+          setStatus(data.codeTarget === "sms" ? t("status.smsSent") : t("status.emailSent"), "warn");
+        } else if (data.needsTfa) {
+          pendingLoginStep = "tfa";
+          pendingTfaKey = data.tfaKey || "";
+          selectedPanel = "bambu";
+          tfaForm.hidden = false;
+          setStatus(t("status.needTfa"), "warn");
+        } else {
+          pendingLoginStep = "";
+          pendingTfaKey = "";
+          selectedPanel = "";
+          await refresh();
+        }
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    });
+
+    codeForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const login = formValues(loginForm);
+        await api("/api/bambu/verify", { region: login.region, account: login.account, code: formValues(codeForm).code });
+        pendingLoginStep = "";
+        codeForm.hidden = true;
+        selectedPanel = "";
+        await refresh();
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    });
+
+    tfaForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const login = formValues(loginForm);
+        await api("/api/bambu/tfa", { region: login.region, tfaKey: pendingTfaKey, tfaCode: formValues(tfaForm).tfaCode });
+        pendingLoginStep = "";
+        pendingTfaKey = "";
+        tfaForm.hidden = true;
+        selectedPanel = "";
+        await refresh();
+      } catch (error) {
+        setStatus(error.message, "bad");
+      }
+    });
+
+    applyLanguage();
+    applyDisplayMode(null);
+    initRevealAnimations();
+    refresh().catch((error) => setStatus(error.message, "bad"));
+    setInterval(() => refresh().catch(() => {}), 10000);
+  </script>
+</body>
+</html>
