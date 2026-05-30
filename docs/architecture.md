@@ -32,7 +32,9 @@ AMS 1 -> B0/B1/B2/B3
 AMS 2 -> C0/C1/C2/C3
 ```
 
-当前只同步能识别出 `tag_uid` 或 `tray_uuid` 的槽位。空槽、全 0 的占位耗材会跳过。外置料架 `vt_tray` 暂不属于 AMS 耗材同步范围。
+当前只同步能识别出 `tray_uuid` 或 `tag_uid` 的槽位。空槽、全 0 的占位耗材会跳过。外置料架 `vt_tray` 暂不属于 AMS 耗材同步范围。
+
+耗材绑定主键由 `BAMBU_UID_FIELDS` 控制，默认是 `tray_uuid,tag_uid`。官方 Bambu 耗材可能左右两侧 RFID 标签 UID 不同，因此优先使用 `tray_uuid` 可以避免同一卷料被拆成两条 Notion 记录。Notion 默认以 `Tray UUID` 字段作为主键；旧版的 `RFID Tag UID` 不再是默认托管字段。
 
 ## Notion 目标解析
 
@@ -73,7 +75,7 @@ AMS 耗材
 服务拥有一组托管字段，例如：
 
 - `AMS 耗材`
-- `RFID Tag UID`
+- `Tray UUID`
 - `余量%`
 - `剩余克数`
 - `材料`
@@ -101,7 +103,7 @@ AMS 耗材的原始 `颜色` 和 `颜色别名` 都是托管字段。服务启�
 ```text
 余量% 不存在 -> 创建 number 类型的 余量%
 最后同步时间 不存在 -> 创建 date 类型的 最后同步时间
-RFID Tag UID 不存在 -> 创建 rich_text 类型的 RFID Tag UID
+Tray UUID 不存在 -> 创建 rich_text 类型的 Tray UUID
 ```
 
 字段缺失不应导致同步永久失败。只要 Notion integration 有权限修改数据库 schema，服务应自动补齐后继续写入。

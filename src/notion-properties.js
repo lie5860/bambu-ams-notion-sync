@@ -58,7 +58,7 @@ export function filterForExactValue(propertyName, propertySchema, value) {
     }
     default:
       throw new Error(
-        `Property "${propertyName}" has unsupported lookup type "${propertySchema.type}". Use a title/rich_text property for RFID Tag UID.`
+        `Property "${propertyName}" has unsupported lookup type "${propertySchema.type}". Use a title/rich_text property for lookup keys.`
       );
   }
 }

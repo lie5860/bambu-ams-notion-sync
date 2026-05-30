@@ -188,6 +188,14 @@ function isZeroish(value) {
   return value == null || value === "" || /^0+$/.test(String(value));
 }
 
+function pickSlotUid(slot, uidFields = ["tray_uuid", "tag_uid"]) {
+  for (const field of uidFields) {
+    const value = slot?.[field];
+    if (!isZeroish(value)) return String(value);
+  }
+  return "";
+}
+
 function swatchIcon(hexColor) {
   if (!hexColor) return undefined;
   const hex = hexColor.replace("#", "").slice(0, 6).toUpperCase();
@@ -758,7 +766,7 @@ export class NotionAmsSync {
       this.warnedMissingProperties.clear();
     }
 
-    this.assertProperty(this.config.properties.amsUid, "RFID Tag UID lookup");
+    this.assertProperty(this.config.properties.amsUid, "AMS filament UID lookup");
   }
 
   async ensureTitleProperty() {
@@ -1605,7 +1613,7 @@ export class NotionAmsSync {
   }
 
   async syncTray(tray, seenAt, colorAliases = null) {
-    const page = await this.findPageByUid(tray.uid);
+    const page = await this.findPageForTray(tray);
     const normalizedColor = normalizeColor(tray.color);
     const iconDescriptor = colorIconDescriptor(tray);
     let colorAlias = normalizedColor && colorAliases?.has(normalizedColor) ? colorAliases.get(normalizedColor) : "";
@@ -1637,7 +1645,7 @@ export class NotionAmsSync {
     }
 
     if (!this.config.createMissingPages) {
-      this.logger.warn(`No Notion row bound to RFID Tag UID ${tray.uid}; skipping`);
+      this.logger.warn(`No Notion row bound to AMS filament UID ${tray.uid}; skipping`);
       return;
     }
 
@@ -1727,7 +1735,7 @@ export class NotionAmsSync {
 
   async findPageByUid(uid) {
     const propName = this.config.properties.amsUid;
-    const propSchema = this.assertProperty(propName, "RFID Tag UID lookup");
+    const propSchema = this.assertProperty(propName, "AMS filament UID lookup");
     const response = await this.client.dataSources.query({
       data_source_id: this.config.dataSourceId,
       filter: filterForExactValue(propName, propSchema, uid),
@@ -1735,10 +1743,46 @@ export class NotionAmsSync {
     });
 
     if (response.results.length > 1) {
-      this.logger.warn(`Multiple Notion rows use RFID Tag UID ${uid}; updating the first one`);
+      this.logger.warn(`Multiple Notion rows use AMS filament UID ${uid}; updating the first one`);
     }
 
     return response.results[0] || null;
+  }
+
+  async findPageByTrayUuid(trayUuid) {
+    if (!trayUuid) return null;
+    const propName = this.config.properties.trayUuid;
+    if (!propName) return null;
+
+    const propSchema = this.schema[propName];
+    if (!propSchema) return null;
+
+    const response = await this.client.dataSources.query({
+      data_source_id: this.config.dataSourceId,
+      filter: filterForExactValue(propName, propSchema, trayUuid),
+      page_size: 2
+    });
+
+    if (response.results.length > 1) {
+      this.logger.warn(`Multiple Notion rows use Tray UUID ${trayUuid}; updating the first one`);
+    }
+
+    return response.results[0] || null;
+  }
+
+  async findPageForTray(tray) {
+    const byUid = await this.findPageByUid(tray.uid);
+    if (byUid) return byUid;
+
+    if (tray.trayUuid && tray.trayUuid !== tray.uid) {
+      const byTrayUuid = await this.findPageByTrayUuid(tray.trayUuid);
+      if (byTrayUuid) {
+        this.logger.info(`Matched existing AMS row by Tray UUID ${tray.trayUuid}; updating stable UID to ${tray.uid}`);
+        return byTrayUuid;
+      }
+    }
+
+    return null;
   }
 
   buildTrayProperties(tray, seenAt, colorAlias = "") {
@@ -2145,7 +2189,7 @@ export class NotionAmsSync {
     const slotId = String(trayIndex % 4);
     const ams = printState.ams.ams.find((item) => String(item.id) === amsId);
     const tray = ams?.tray?.find((item) => String(item.id) === slotId);
-    const uid = tray && !isZeroish(tray.tag_uid) ? String(tray.tag_uid) : "";
+    const uid = pickSlotUid(tray, this.config.uidFields);
     return { slotLabel: label, uid };
   }
 

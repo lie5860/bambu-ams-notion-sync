@@ -78,7 +78,7 @@ export function loadConfig(source = process.env) {
             accessToken: cloudToken.accessToken
           }
         : null,
-      uidFields: csvFrom(source, "BAMBU_UID_FIELDS", "tag_uid,tray_uuid"),
+      uidFields: csvFrom(source, "BAMBU_UID_FIELDS", "tray_uuid,tag_uid"),
       defaultSpoolWeightGrams: intFrom(source, "DEFAULT_SPOOL_WEIGHT_GRAMS", 1000),
       correctRemainForTrayWeight: boolFrom(source, "CORRECT_REMAIN_FOR_TRAY_WEIGHT", true),
       pushAllOnStart: boolFrom(source, "PUSHALL_ON_START", true),
@@ -94,8 +94,9 @@ export function loadConfig(source = process.env) {
       taskFilamentDatabaseName: optionalFrom(source, "NOTION_TASK_FILAMENT_DATABASE_NAME", "耗材用量明细"),
       taskFilamentSpecDatabaseName: optionalFrom(source, "NOTION_TASK_FILAMENT_SPEC_DATABASE_NAME", "耗材色卡"),
       taskFilamentColorDatabaseName: optionalFrom(source, "NOTION_TASK_FILAMENT_COLOR_DATABASE_NAME", "颜色映射"),
+      uidFields: csvFrom(source, "BAMBU_UID_FIELDS", "tray_uuid,tag_uid"),
       properties: {
-        amsUid: optionalFrom(source, "NOTION_AMS_UID_PROP", "RFID Tag UID"),
+        amsUid: optionalFrom(source, "NOTION_AMS_UID_PROP", "Tray UUID"),
         remainPercent: optionalFrom(source, "NOTION_REMAIN_PERCENT_PROP", "余量%"),
         remainGrams: optionalFrom(source, "NOTION_REMAIN_GRAMS_PROP", "剩余克数"),
         amsSlot: optionalFrom(source, "NOTION_AMS_SLOT_PROP"),
@@ -108,7 +109,7 @@ export function loadConfig(source = process.env) {
         colorType: optionalFrom(source, "NOTION_COLOR_TYPE_PROP", "颜色类型"),
         colorAlias: optionalFrom(source, "NOTION_COLOR_ALIAS_PROP", "颜色别名"),
         tagUid: optionalFrom(source, "NOTION_TAG_UID_PROP"),
-        trayUuid: optionalFrom(source, "NOTION_TRAY_UUID_PROP", "Tray UUID"),
+        trayUuid: optionalFrom(source, "NOTION_TRAY_UUID_PROP"),
         trayWeight: optionalFrom(source, "NOTION_TRAY_WEIGHT_PROP", "料盘重量g"),
         title: optionalFrom(source, "NOTION_TITLE_PROP", "AMS 耗材")
       },

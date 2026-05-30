@@ -160,7 +160,7 @@ docker run -d \
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `AMS 耗材` | Title | 页面标题，格式是 `材料 · RFID短码`，例如 `PLA Basic · C6A86FCC` |
-| `RFID Tag UID` | Rich text | 主键，来自 AMS 的 `tag_uid` |
+| `Tray UUID` | Rich text | 主键，默认来自 AMS 的 `tray_uuid`；缺失时才退回 `tag_uid` |
 | `余量%` | Number | AMS 上报的剩余百分比 |
 | `剩余克数` | Number | 按余量和料盘重量估算 |
 | `材料` | Rich text | 例如 `PLA Basic` |
@@ -168,7 +168,6 @@ docker run -d \
 | `颜色列表` | Rich text | 多色/渐变耗材的全部色号，例如 `#0047BB / #BB22A3` |
 | `颜色类型` | Rich text | `单色`、`多色` 或 `渐变` |
 | `料盘重量g` | Number | AMS 上报的 `tray_weight`，默认 1000g |
-| `Tray UUID` | Rich text | Bambu 上报的另一个耗材/料盘识别值 |
 | `最后同步时间` | Date | 最近一次同步时间 |
 
 每条 `AMS 耗材` 页面会把当前色号生成 64x64 PNG 并上传到 Notion 作为页面 icon。单色耗材显示纯色色块，多色耗材显示硬分段色条，渐变耗材显示平滑渐变。
@@ -192,9 +191,11 @@ Notion 的 Relation 选择器通常会显示页面 icon，所以选择关联耗�
 
 ## Tray UUID 是什么
 
-`tag_uid` 是 RFID 标签 UID，更适合做“这卷耗材”的主键。
+`tag_uid` 是 RFID 标签 UID。官方耗材可能有不止一个 RFID 标签，左右两侧读到的 `tag_uid` 可能不同，因此它不适合单独做“这卷耗材”的长期主键。
 
-`tray_uuid` 是 Bambu 在 AMS 数据里同时上报的另一个识别值，社区 Spoolman 项目常用它来绑定原厂 Bambu 料盘。它不是槽位；槽位是 A0/A1/A2/A3。这里保留 `Tray UUID` 只是为了排查和兼容，主键仍然是 `RFID Tag UID`。
+`tray_uuid` 是 Bambu 在 AMS 数据里上报的耗材/料盘识别值，社区 Spoolman 项目也常用它来绑定原厂 Bambu 料盘。它不是槽位；槽位是 A0/A1/A2/A3。服务默认使用 `BAMBU_UID_FIELDS=tray_uuid,tag_uid`，并把 `Tray UUID` 作为 Notion 主键，让官方耗材翻面或读到另一侧 RFID 时仍然更新同一条 Notion 记录。
+
+旧版本把 `RFID Tag UID` 当主键。升级后这个字段不再是默认托管字段，可以保留作排查，也可以在确认没有 relation 依赖后删除。
 
 ## 常用操作
 
