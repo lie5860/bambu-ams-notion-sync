@@ -9,37 +9,45 @@ import {
   loginWithTfa,
   saveCloudToken
 } from "./cloud-auth.js";
+import { parseBody } from "./http.js";
 
 const PORT = Number(process.env.CLOUD_LOGIN_PORT || 3030);
 const HOST = process.env.CLOUD_LOGIN_HOST || "127.0.0.1";
 const TOKEN_FILE = resolve(process.env.BAMBU_CLOUD_TOKEN_FILE || ".bambu-cloud.json");
 
 function sendJson(res, status, body) {
+  if (res.destroyed || res.writableEnded || res.closed) return false;
+  if (res.headersSent) {
+    res.destroy();
+    return false;
+  }
+
+  const payload = JSON.stringify(body);
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store"
   });
-  res.end(JSON.stringify(body));
+  res.end(payload);
+  return true;
 }
 
-function parseBody(req) {
-  return new Promise((resolveBody, reject) => {
-    let raw = "";
-    req.on("data", (chunk) => {
-      raw += chunk;
-      if (raw.length > 100_000) {
-        reject(new Error("Request body too large"));
-        req.destroy();
-      }
-    });
-    req.on("end", () => {
-      try {
-        resolveBody(raw ? JSON.parse(raw) : {});
-      } catch {
-        reject(new Error("Invalid JSON"));
-      }
-    });
-  });
+function errorStatus(error, fallback) {
+  const status = Number(error?.statusCode);
+  return Number.isInteger(status) && status >= 400 && status <= 599 ? status : fallback;
+}
+
+function sendError(res, status, error) {
+  if (res.destroyed || res.writableEnded || res.closed) return;
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+
+  try {
+    sendJson(res, status, { error: error?.message || "Request failed" });
+  } catch {
+    if (!res.destroyed) res.destroy();
+  }
 }
 
 function maskTokenData(token) {
@@ -317,6 +325,17 @@ function page() {
 }
 
 async function handleApi(req, res, pathname) {
+  const controller = new AbortController();
+  const abortRequest = () => {
+    if (!controller.signal.aborted) controller.abort(new Error("Cloud login request was disconnected"));
+  };
+  const abortOnResponseClose = () => {
+    if (!res.writableEnded) abortRequest();
+  };
+  req.once("aborted", abortRequest);
+  res.once("close", abortOnResponseClose);
+  if (req.aborted) abortRequest();
+
   try {
     if (pathname === "/api/status" && req.method === "GET") {
       try {
@@ -331,7 +350,7 @@ async function handleApi(req, res, pathname) {
     const body = await parseBody(req);
 
     if (pathname === "/api/login" && req.method === "POST") {
-      const result = await loginWithPassword(body);
+      const result = await loginWithPassword({ ...body, signal: controller.signal });
       if (result.token) {
         await saveCloudToken(TOKEN_FILE, result.token);
         sendJson(res, 200, { token: maskTokenData(result.token) });
@@ -342,14 +361,14 @@ async function handleApi(req, res, pathname) {
     }
 
     if (pathname === "/api/verify" && req.method === "POST") {
-      const result = await loginWithCode(body);
+      const result = await loginWithCode({ ...body, signal: controller.signal });
       await saveCloudToken(TOKEN_FILE, result.token);
       sendJson(res, 200, { token: maskTokenData(result.token) });
       return;
     }
 
     if (pathname === "/api/tfa" && req.method === "POST") {
-      const result = await loginWithTfa(body);
+      const result = await loginWithTfa({ ...body, signal: controller.signal });
       await saveCloudToken(TOKEN_FILE, result.token);
       sendJson(res, 200, { token: maskTokenData(result.token) });
       return;
@@ -357,14 +376,25 @@ async function handleApi(req, res, pathname) {
 
     sendJson(res, 404, { error: "Not found" });
   } catch (error) {
-    sendJson(res, 400, { error: error.message });
+    sendError(res, errorStatus(error, 400), error);
+  } finally {
+    req.removeListener("aborted", abortRequest);
+    res.removeListener("close", abortOnResponseClose);
   }
 }
 
-const server = createServer((req, res) => {
-  const url = new URL(req.url, `http://${HOST}:${PORT}`);
+async function handleRequest(req, res) {
+  let url;
+  try {
+    url = new URL(req.url || "/", "http://localhost");
+  } catch (cause) {
+    const error = new Error("Invalid request URL", { cause });
+    error.statusCode = 400;
+    throw error;
+  }
+
   if (url.pathname.startsWith("/api/")) {
-    handleApi(req, res, url.pathname);
+    await handleApi(req, res, url.pathname);
     return;
   }
 
@@ -373,9 +403,40 @@ const server = createServer((req, res) => {
     "Cache-Control": "no-store"
   });
   res.end(page());
+}
+
+function handleRequestFailure(req, res, error) {
+  try {
+    console.error(`Cloud login request failed (${req.method || "UNKNOWN"}): ${error?.message || error}`);
+    sendError(res, errorStatus(error, 500), error);
+  } catch {
+    try {
+      if (!res.destroyed) res.destroy();
+    } catch {
+      // The request boundary must never create another uncaught error.
+    }
+  }
+}
+
+const server = createServer((req, res) => {
+  req.on("error", () => {});
+  res.on("error", () => {});
+  try {
+    Promise.resolve(handleRequest(req, res)).catch((error) => {
+      handleRequestFailure(req, res, error);
+    });
+  } catch (error) {
+    handleRequestFailure(req, res, error);
+  }
 });
 
+server.headersTimeout = 30_000;
+server.requestTimeout = 60_000;
+
 server.listen(PORT, HOST, () => {
-  console.log(`Bambu Cloud login UI: http://${HOST}:${PORT}`);
+  const address = server.address();
+  const listeningPort = typeof address === "object" && address ? address.port : PORT;
+  const displayHost = HOST.includes(":") ? `[${HOST}]` : HOST;
+  console.log(`Bambu Cloud login UI: http://${displayHost}:${listeningPort}`);
   console.log(`Token file: ${TOKEN_FILE}`);
 });

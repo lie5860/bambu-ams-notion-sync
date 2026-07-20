@@ -10,7 +10,8 @@
     "sync:start": "node src/index.js",
     "cloud:login": "node src/cloud-login-server.js",
     "debug:bambu": "node src/debug-bambu.js",
-    "check": "node --check src/index.js && node --check src/admin-server.js && node --check src/config-store.js && node --check src/config.js && node --check src/bambu.js && node --check src/bambu-cloud-tasks.js && node --check src/cloud-auth.js && node --check src/cloud-login-server.js && node --check src/debug-bambu.js && node --check src/notion-sync.js && node --check src/notion-properties.js && node --check src/color-icon.js && node --check src/logger.js"
+    "test": "node --test",
+    "check": "node --check src/index.js && node --check src/admin-server.js && node --check src/config-store.js && node --check src/config.js && node --check src/bambu.js && node --check src/bambu-cloud-tasks.js && node --check src/cloud-auth.js && node --check src/cloud-login-server.js && node --check src/debug-bambu.js && node --check src/http.js && node --check src/notion-sync.js && node --check src/notion-properties.js && node --check src/color-icon.js && node --check src/logger.js"
   },
   "dependencies": {
     "@notionhq/client": "^5.22.0",

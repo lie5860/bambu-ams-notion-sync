@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Client } from "@notionhq/client";
 import {
   checkboxFilter,
@@ -11,11 +12,120 @@ import {
   iconColorTypeLabel,
   renderColorIconPng
 } from "./color-icon.js";
+import { awaitWithSignal, readResponseText, withTimeout } from "./http.js";
 
 const NOTION_MIN_REQUEST_INTERVAL_MS = 1000;
+const NOTION_HTTP_TIMEOUT_MS = 30_000;
+const NOTION_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+const EXTERNAL_FILE_FETCH_TIMEOUT_MS = 30_000;
+const EXTERNAL_FILE_MAX_BYTES = 20 * 1024 * 1024;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function cancelResponseBody(body, reason) {
+  try {
+    Promise.resolve(body?.cancel?.(reason)).catch(() => {});
+  } catch {
+    // Cancellation is best effort and must not replace the original media failure.
+  }
+}
+
+export async function fetchNotionResponse(input, init = {}, {
+  timeoutMs = NOTION_HTTP_TIMEOUT_MS,
+  maxBytes = NOTION_RESPONSE_MAX_BYTES,
+  fetchImpl = globalThis.fetch,
+  signal: ownerSignal
+} = {}) {
+  const signals = [...new Set([init.signal, ownerSignal].filter(Boolean))];
+  const callerSignal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+  return withTimeout(async (signal) => {
+    const response = await fetchImpl(input, { ...init, signal });
+    const text = await readResponseText(response, { maxBytes, signal });
+    if (response.ok && text.trim()) {
+      try {
+        JSON.parse(text);
+      } catch (cause) {
+        const error = new Error("Notion returned an invalid JSON response", { cause });
+        error.code = "INVALID_HTTP_RESPONSE";
+        error.status = response.status;
+        throw error;
+      }
+    }
+    return new Response(text || null, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers
+    });
+  }, { timeoutMs, signal: callerSignal });
+}
+
+async function responseBytesWithLimit(response, maxBytes = EXTERNAL_FILE_MAX_BYTES, signal) {
+  const contentLength = Number(response.headers?.get?.("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    cancelResponseBody(response.body);
+    throw new Error(`External file exceeds ${maxBytes} bytes`);
+  }
+
+  if (!response.body?.getReader) {
+    const bytes = await awaitWithSignal(response.arrayBuffer(), signal);
+    if (bytes.byteLength > maxBytes) throw new Error(`External file exceeds ${maxBytes} bytes`);
+    return bytes;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  let complete = false;
+  try {
+    while (true) {
+      const { done, value } = await awaitWithSignal(reader.read(), signal);
+      if (done) {
+        complete = true;
+        break;
+      }
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error(`External file exceeds ${maxBytes} bytes`);
+      chunks.push(value);
+    }
+  } finally {
+    if (!complete) cancelResponseBody(reader, signal?.reason);
+    try {
+      reader.releaseLock?.();
+    } catch {
+      // Cancellation may still be releasing a pending stream read.
+    }
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes.buffer;
+}
+
+export function fetchExternalFile(url, {
+  timeoutMs = EXTERNAL_FILE_FETCH_TIMEOUT_MS,
+  maxBytes = EXTERNAL_FILE_MAX_BYTES,
+  fetchImpl = globalThis.fetch,
+  signal
+} = {}) {
+  return withTimeout(async (signal) => {
+    const response = await fetchImpl(url, { signal });
+    if (!response?.ok) {
+      const error = new Error(`${response?.status || "Unknown"} ${response?.statusText || "external file request failed"}`);
+      error.status = response?.status;
+      throw error;
+    }
+    const bytes = await responseBytesWithLimit(response, maxBytes, signal);
+    return {
+      bytes,
+      contentType: response.headers?.get?.("content-type") || ""
+    };
+  }, { timeoutMs, signal });
 }
 
 function compactObject(entries) {
@@ -213,9 +323,14 @@ export class NotionAmsSync {
   constructor(config, logger) {
     this.config = config;
     this.logger = logger;
+    this.requestSignalContext = new AsyncLocalStorage();
     this.client = new Client({
       auth: config.token,
-      notionVersion: "2025-09-03"
+      notionVersion: "2025-09-03",
+      fetch: (input, init) => fetchNotionResponse(input, init, {
+        signal: this.currentRequestSignal()
+      }),
+      timeoutMs: NOTION_HTTP_TIMEOUT_MS
     });
     this.notionRequestQueue = Promise.resolve();
     this.lastNotionRequestAt = 0;
@@ -252,13 +367,31 @@ export class NotionAmsSync {
     this.printTaskSyncEnabled = true;
   }
 
+  currentRequestSignal() {
+    return this.requestSignalContext?.getStore?.() || null;
+  }
+
+  runWithRequestSignal(signal, operation) {
+    if (!signal) return operation();
+    signal.throwIfAborted();
+    if (!this.requestSignalContext) this.requestSignalContext = new AsyncLocalStorage();
+    return this.requestSignalContext.run(signal, operation);
+  }
+
+  throwIfRequestAborted(error) {
+    const signal = this.currentRequestSignal();
+    if (signal?.aborted) throw signal.reason || error;
+  }
+
   installNotionRequestLimiter() {
     const originalRequest = this.client.request.bind(this.client);
     this.client.request = async (args) => {
+      const signal = this.currentRequestSignal();
       const run = async () => {
         const elapsed = Date.now() - this.lastNotionRequestAt;
         const waitMs = Math.max(0, NOTION_MIN_REQUEST_INTERVAL_MS - elapsed);
-        if (waitMs > 0) await sleep(waitMs);
+        if (waitMs > 0) await awaitWithSignal(sleep(waitMs), signal);
+        signal?.throwIfAborted();
         this.lastNotionRequestAt = Date.now();
         return originalRequest(args);
       };
@@ -269,7 +402,17 @@ export class NotionAmsSync {
     };
   }
 
-  async init({ deferMaintenance = false, enableAmsSync = true, enablePrintTaskSync = true } = {}) {
+  async init(options = {}) {
+    const { signal } = options;
+    if (signal && this.currentRequestSignal() !== signal) {
+      return this.runWithRequestSignal(signal, () => this.init(options));
+    }
+    const {
+      deferMaintenance = false,
+      enableAmsSync = true,
+      enablePrintTaskSync = true
+    } = options;
+    signal?.throwIfAborted();
     if (!this.client.dataSources?.retrieve || !this.client.dataSources?.query || !this.client.dataSources?.update) {
       throw new Error("Installed @notionhq/client does not support dataSources. Run npm install with the bundled package.json.");
     }
@@ -280,23 +423,32 @@ export class NotionAmsSync {
     const dataSource = await this.resolveDataSource(this.config.dataSourceId, {
       createAmsDataSource: enableAmsSync
     });
+    signal?.throwIfAborted();
 
     this.schema = dataSource.properties || {};
     if (enableAmsSync) await this.ensureAmsSchema();
     if (enableAmsSync || enablePrintTaskSync) await this.ensureTaskFilamentColorDataSource();
     if (enablePrintTaskSync) {
       await this.ensureTaskDataSource();
+      if (!this.taskDataSourceId) {
+        throw new Error("Notion print task data source could not be initialized");
+      }
       await this.ensureTaskFilamentSpecDataSource();
       await this.ensureTaskFilamentDataSource();
       await this.ensureTaskSchema({ refresh: true });
     }
-    if (!deferMaintenance) await this.runStartupMaintenance();
+    if (!deferMaintenance) await this.runStartupMaintenance({ signal });
+    signal?.throwIfAborted();
     this.logger.info(
       `Loaded Notion data source ${this.config.dataSourceId} schema with ${Object.keys(this.schema).length} properties`
     );
   }
 
-  async runStartupMaintenance() {
+  async runStartupMaintenance({ signal } = {}) {
+    if (signal && this.currentRequestSignal() !== signal) {
+      return this.runWithRequestSignal(signal, () => this.runStartupMaintenance({ signal }));
+    }
+    signal?.throwIfAborted();
     if (this.amsSyncEnabled) await this.syncAmsColorAliasesFromColorMappings();
     if (this.printTaskSyncEnabled) {
       await this.syncTaskFilamentSpecTitlesFromColorMappings();
@@ -304,6 +456,7 @@ export class NotionAmsSync {
       await this.ensureTaskDefaultView();
       await this.backfillTaskDisplayImages();
     }
+    signal?.throwIfAborted();
   }
 
   async resolveDataSource(id, { createAmsDataSource = true } = {}) {
@@ -333,9 +486,10 @@ export class NotionAmsSync {
     try {
       await this.client.pages.retrieve({ page_id: id });
       this.parentPageId = id;
-    } catch {
+    } catch (error) {
       throw new Error(
-        `Cannot find Notion target ${id}. Share the page/database with your Notion integration, then restart the sync service.`
+        `Cannot find Notion target ${id}. Share the page/database with your Notion integration, then restart the sync service.`,
+        { cause: error }
       );
     }
 
@@ -365,7 +519,10 @@ export class NotionAmsSync {
     try {
       const database = await this.client.databases.retrieve({ database_id: databaseId });
       this.rememberParentPageFromDatabase(database);
-    } catch {
+    } catch (error) {
+      if (this.printTaskSyncEnabled) {
+        throw new Error(`Cannot resolve the parent page for Notion database ${databaseId}`, { cause: error });
+      }
       // The AMS sync can still work with a direct data source even if sibling tables cannot be inferred.
     }
   }
@@ -923,12 +1080,8 @@ export class NotionAmsSync {
 
   async findTaskViewByName(viewRefs, name) {
     for (const ref of viewRefs) {
-      try {
-        const view = await this.client.views.retrieve({ view_id: ref.id });
-        if (view.name === name) return view;
-      } catch (error) {
-        this.logger.warn(`Cannot inspect Notion print task view ${ref.id}: ${error.message}`);
-      }
+      const view = await this.client.views.retrieve({ view_id: ref.id });
+      if (view.name === name) return view;
     }
     return null;
   }
@@ -1015,34 +1168,26 @@ export class NotionAmsSync {
     const viewRefs = await this.client.views.list({ data_source_id: this.taskFilamentDataSourceId, page_size: 100 });
     for (const request of viewRequests) {
       const existing = await this.findTaskFilamentViewByName(viewRefs.results || [], request.name);
-      try {
-        if (existing?.type === request.type) {
-          await this.client.views.update({ view_id: existing.id, ...request });
-          this.logger.info(`Updated Notion print task filament view "${request.name}"`);
-          continue;
-        }
-
-        await this.client.views.create({
-          data_source_id: this.taskFilamentDataSourceId,
-          database_id: this.taskFilamentDatabaseId,
-          ...request,
-          position: { type: "end" }
-        });
-        this.logger.info(`Created Notion print task filament view "${request.name}"`);
-      } catch (error) {
-        this.logger.warn(`Cannot configure Notion print task filament view "${request.name}": ${error.message}`);
+      if (existing?.type === request.type) {
+        await this.client.views.update({ view_id: existing.id, ...request });
+        this.logger.info(`Updated Notion print task filament view "${request.name}"`);
+        continue;
       }
+
+      await this.client.views.create({
+        data_source_id: this.taskFilamentDataSourceId,
+        database_id: this.taskFilamentDatabaseId,
+        ...request,
+        position: { type: "end" }
+      });
+      this.logger.info(`Created Notion print task filament view "${request.name}"`);
     }
   }
 
   async findTaskFilamentViewByName(viewRefs, name) {
     for (const ref of viewRefs) {
-      try {
-        const view = await this.client.views.retrieve({ view_id: ref.id });
-        if (view.name === name) return view;
-      } catch (error) {
-        this.logger.warn(`Cannot inspect Notion print task filament view ${ref.id}: ${error.message}`);
-      }
+      const view = await this.client.views.retrieve({ view_id: ref.id });
+      if (view.name === name) return view;
     }
     return null;
   }
@@ -1566,7 +1711,11 @@ export class NotionAmsSync {
     );
   }
 
-  async syncTrays(trays) {
+  async syncTrays(trays, { signal } = {}) {
+    if (signal && this.currentRequestSignal() !== signal) {
+      return this.runWithRequestSignal(signal, () => this.syncTrays(trays, { signal }));
+    }
+    signal?.throwIfAborted();
     if (!this.amsSyncEnabled) return;
 
     this.pendingTraySync = trays;
@@ -1581,7 +1730,16 @@ export class NotionAmsSync {
         while (this.pendingTraySync) {
           const nextTrays = this.pendingTraySync;
           this.pendingTraySync = null;
-          await this.syncTrayBatch(nextTrays);
+          try {
+            signal?.throwIfAborted();
+            await this.syncTrayBatch(nextTrays, { signal });
+            signal?.throwIfAborted();
+          } catch (error) {
+            if (!this.pendingTraySync) throw error;
+            this.logger.warn(
+              `AMS sync failed while a newer snapshot was queued; continuing with the latest snapshot: ${error.message}`
+            );
+          }
         }
       } finally {
         this.traySyncRunning = false;
@@ -1592,9 +1750,10 @@ export class NotionAmsSync {
     return this.traySyncPromise;
   }
 
-  async syncTrayBatch(trays) {
+  async syncTrayBatch(trays, { signal } = {}) {
     if (!this.amsSyncEnabled) return;
 
+    signal?.throwIfAborted();
     await this.ensureAmsSchema({ refresh: true });
     await this.ensureTaskFilamentColorSchema();
     const colorAliases = await this.taskFilamentColorAliasMap();
@@ -1604,10 +1763,12 @@ export class NotionAmsSync {
     const activeUids = new Set(uniqueTrays.map((tray) => tray.uid));
 
     for (const tray of uniqueTrays) {
+      signal?.throwIfAborted();
       await this.syncTray(tray, seenAt, colorAliases);
     }
 
     if (this.config.clearAbsentLoaded) {
+      signal?.throwIfAborted();
       await this.clearAbsentLoaded(activeUids, seenAt);
     }
   }
@@ -1639,7 +1800,12 @@ export class NotionAmsSync {
       }
 
       const icon = await this.amsSwatchIcon(iconDescriptor);
-      await this.updatePage(page.id, properties, tray, icon);
+      try {
+        await this.updatePage(page.id, properties, tray, icon);
+      } catch (error) {
+        this.discardUnconfirmedAmsIcon(iconDescriptor, icon);
+        throw error;
+      }
       this.lastSignatures.set(tray.uid, signature);
       return;
     }
@@ -1650,7 +1816,12 @@ export class NotionAmsSync {
     }
 
     const icon = await this.amsSwatchIcon(iconDescriptor);
-    await this.createMissingPage(tray, properties, icon);
+    try {
+      await this.createMissingPage(tray, properties, icon);
+    } catch (error) {
+      this.discardUnconfirmedAmsIcon(iconDescriptor, icon);
+      throw error;
+    }
     this.lastSignatures.set(tray.uid, signature);
   }
 
@@ -1910,7 +2081,11 @@ export class NotionAmsSync {
     }
   }
 
-  async syncPrinterStatus(printState) {
+  async syncPrinterStatus(printState, { signal } = {}) {
+    if (signal && this.currentRequestSignal() !== signal) {
+      return this.runWithRequestSignal(signal, () => this.syncPrinterStatus(printState, { signal }));
+    }
+    signal?.throwIfAborted();
     if (!this.printTaskSyncEnabled) return;
     if (!this.taskDataSourceId) return;
 
@@ -1930,17 +2105,17 @@ export class NotionAmsSync {
     };
     this.activeTasks.set(record.taskKey, state);
 
-    if (!shouldWrite) return;
+    if (!shouldWrite && !state.pendingWrite) return;
     state.pendingWrite = true;
     if (state.writeInFlight) {
       this.logger.debug(`Queued print task status update while previous write is still running: ${record.taskKey}`);
       return;
     }
 
-    await this.flushPrinterStatusTask(record.taskKey);
+    await this.flushPrinterStatusTask(record.taskKey, { signal });
   }
 
-  async flushPrinterStatusTask(taskKey) {
+  async flushPrinterStatusTask(taskKey, { signal } = {}) {
     let state = this.activeTasks.get(taskKey);
     if (!state || state.writeInFlight) return;
 
@@ -1951,7 +2126,25 @@ export class NotionAmsSync {
         if (!state.pendingWrite) break;
         state.pendingWrite = false;
         const record = state.record;
-        await this.upsertPrintTask(record);
+        try {
+          signal?.throwIfAborted();
+          await this.upsertPrintTask(record);
+          signal?.throwIfAborted();
+        } catch (error) {
+          const latest = this.activeTasks.get(taskKey) || state;
+          if (!latest.pendingWrite) {
+            // Preserve the failed write as pending. The outer MQTT supervisor
+            // will retry the same snapshot; without this marker the in-memory
+            // merged record could make that retry look unchanged and drop it.
+            latest.pendingWrite = true;
+            this.activeTasks.set(taskKey, latest);
+            throw error;
+          }
+          this.logger.warn(
+            `Print task sync failed while a newer state was queued; continuing with the latest state for ${taskKey}: ${error.message}`
+          );
+          continue;
+        }
         const latest = this.activeTasks.get(taskKey) || state;
         state = {
           ...latest,
@@ -1971,13 +2164,19 @@ export class NotionAmsSync {
     }
   }
 
-  async syncCloudPrintTasks(tasks, { onTaskSynced } = {}) {
+  async syncCloudPrintTasks(tasks, options = {}) {
+    const { onTaskSynced, signal } = options;
+    if (signal && this.currentRequestSignal() !== signal) {
+      return this.runWithRequestSignal(signal, () => this.syncCloudPrintTasks(tasks, options));
+    }
     if (!this.printTaskSyncEnabled) return { synced: 0, changed: 0, unchanged: 0, lastTaskTime: "" };
     if (!this.taskDataSourceId || !Array.isArray(tasks) || tasks.length === 0) {
       return { synced: 0, changed: 0, unchanged: 0, lastTaskTime: "" };
     }
 
+    signal?.throwIfAborted();
     await this.ensureTaskSchema({ refresh: true });
+    signal?.throwIfAborted();
     const records = tasks
       .map((task) => this.printTaskRecordFromCloudTask(task))
       .filter(Boolean)
@@ -1995,13 +2194,18 @@ export class NotionAmsSync {
     let lastTaskTime = "";
     try {
       for (const record of records) {
+        signal?.throwIfAborted();
         const result = await this.upsertPrintTask(record);
+        signal?.throwIfAborted();
         synced += 1;
         if (result?.changed === false) unchanged += 1;
         else changed += 1;
         const recordTimeMs = printTaskRecordHistoryTimeMs(record);
         if (recordTimeMs > 0) lastTaskTime = new Date(recordTimeMs).toISOString();
-        if (onTaskSynced) await onTaskSynced(record, { synced, changed, unchanged, lastTaskTime });
+        if (onTaskSynced) {
+          await onTaskSynced(record, { synced, changed, unchanged, lastTaskTime });
+          signal?.throwIfAborted();
+        }
       }
     } finally {
       this.cloudTaskBatchMode = false;
@@ -2290,6 +2494,7 @@ export class NotionAmsSync {
   }
 
   async upsertPrintTask(record) {
+    this.currentRequestSignal()?.throwIfAborted();
     await this.ensureTaskSchema({ refresh: !this.cloudTaskBatchMode });
     const pages = await this.findTaskPagesByKey(record.taskKey);
     const canonical = pages.length > 0 ? this.chooseCanonicalTaskPage(pages) : null;
@@ -2338,6 +2543,7 @@ export class NotionAmsSync {
       return { changed: true, action: canonical ? "updated" : "created", pageId: canonical?.id || "" };
     }
 
+    this.currentRequestSignal()?.throwIfAborted();
     let pageId = canonical?.id;
     if (pageId) {
       await this.client.pages.update({
@@ -2363,6 +2569,7 @@ export class NotionAmsSync {
     }
 
     const usagePages = await this.syncTaskFilamentUsages(record, pageId);
+    this.currentRequestSignal()?.throwIfAborted();
     const usagePageIds = usagePages.map((item) => item.pageId).filter(Boolean);
     if (usagePageIds.length > 0) {
       await this.updateTaskFilamentUsageRelation(pageId, usagePageIds);
@@ -3145,13 +3352,10 @@ export class NotionAmsSync {
     if (!url || !this.client.fileUploads?.create || !this.client.fileUploads?.send) return null;
 
     try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`${response.status} ${response.statusText}`);
-      }
-
-      const bytes = await response.arrayBuffer();
-      const contentType = this.contentTypeForUpload(bytes, filename, response.headers.get("content-type"));
+      const signal = this.currentRequestSignal();
+      const externalFile = await fetchExternalFile(url, { signal });
+      const { bytes } = externalFile;
+      const contentType = this.contentTypeForUpload(bytes, filename, externalFile.contentType);
       const upload = await this.client.fileUploads.create({
         mode: "single_part",
         filename,
@@ -3166,7 +3370,7 @@ export class NotionAmsSync {
       });
 
       for (let i = 0; i < 10 && sent.status === "pending"; i += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await awaitWithSignal(sleep(1000), signal);
         sent = await this.client.fileUploads.retrieve({ file_upload_id: upload.id });
       }
 
@@ -3177,6 +3381,7 @@ export class NotionAmsSync {
 
       return sent;
     } catch (error) {
+      this.throwIfRequestAborted(error);
       this.logger.warn(`Failed to upload Notion file "${filename}": ${error.message}`);
       return null;
     }
@@ -3186,6 +3391,7 @@ export class NotionAmsSync {
     if (!bytes || !this.client.fileUploads?.create || !this.client.fileUploads?.send) return null;
 
     try {
+      const signal = this.currentRequestSignal();
       const upload = await this.client.fileUploads.create({
         mode: "single_part",
         filename,
@@ -3200,7 +3406,7 @@ export class NotionAmsSync {
       });
 
       for (let i = 0; i < 10 && sent.status === "pending"; i += 1) {
-        await sleep(1000);
+        await awaitWithSignal(sleep(1000), signal);
         sent = await this.client.fileUploads.retrieve({ file_upload_id: upload.id });
       }
 
@@ -3211,6 +3417,7 @@ export class NotionAmsSync {
 
       return sent;
     } catch (error) {
+      this.throwIfRequestAborted(error);
       this.logger.warn(`Failed to upload Notion file "${filename}": ${error.message}`);
       return null;
     }
@@ -3232,6 +3439,13 @@ export class NotionAmsSync {
 
     this.amsIconUploadCache.set(descriptor.key, upload.id);
     return { type: "file_upload", file_upload: { id: upload.id } };
+  }
+
+  discardUnconfirmedAmsIcon(descriptor, icon) {
+    if (!descriptor?.key || !icon?.file_upload?.id) return;
+    if (this.amsIconUploadCache.get(descriptor.key) === icon.file_upload.id) {
+      this.amsIconUploadCache.delete(descriptor.key);
+    }
   }
 
   contentTypeForFilename(filename) {
@@ -3357,12 +3571,9 @@ export class NotionAmsSync {
   async filamentPageIdsForUids(uids) {
     const ids = [];
     for (const uid of uniq(uids)) {
-      try {
-        const page = await this.findPageByUid(uid);
-        if (page?.id) ids.push(page.id);
-      } catch (error) {
-        this.logger.warn(`Cannot resolve AMS filament relation for ${uid}: ${error.message}`);
-      }
+      this.currentRequestSignal()?.throwIfAborted();
+      const page = await this.findPageByUid(uid);
+      if (page?.id) ids.push(page.id);
     }
     return ids;
   }

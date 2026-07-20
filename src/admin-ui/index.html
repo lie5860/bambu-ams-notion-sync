@@ -466,6 +466,7 @@
         "state.on": "开启",
         "state.off": "关闭",
         "state.starting": "启动中",
+        "state.retrying": "等待重试",
         "state.running": "运行中",
         "state.notStarted": "未启动",
         "state.connected": "已连接",
@@ -486,6 +487,7 @@
         "summary.runningCloud": "运行中 · {status}",
         "summary.runningHistory": "运行中 · 打印历史已开启",
         "summary.starting": "启动中 · {phase}",
+        "summary.retrying": "网络异常 · {time} 自动重试（第 {attempt} 次）",
         "bento.bambuChecking": "检查拓竹云登录状态...",
         "bento.bambuWait": "等待登录拓竹云账号。",
         "bento.bambuReady": "{region} · {count} 台设备可用",
@@ -493,6 +495,7 @@
         "bento.notionReady": "目标 ID …{id}",
         "bento.syncWait": "等待启用同步。",
         "bento.syncStarting": "启动中 · {phase}",
+        "bento.syncRetrying": "网络暂时不可用 · {time} 自动重试",
         "bento.syncRunning": "运行中 · AMS {ams} · 打印历史 {history}",
         "runtime.noService": "同步服务未启动",
         "runtime.service": "服务",
@@ -509,7 +512,11 @@
         "runtime.historyTo": "历史同步到",
         "runtime.historyOff": "任务历史: 未开启",
         "runtime.phase": "启动阶段",
+        "runtime.retry": "下次自动重试",
         "runtime.maintenance": "后台维护: 运行中",
+        "runtime.maintenanceRetry": "后台维护重试",
+        "runtime.historyRetry": "打印历史重试",
+        "runtime.mqttRecovering": "打印机连接正在自动恢复",
         "runtime.manualPending": "立即同步: 等待连接后执行",
         "runtime.hint": "提示",
         "overview.ams": "AMS",
@@ -533,6 +540,8 @@
         "progress.waitChooseTitle": "等待选择同步内容",
         "progress.waitChooseMeta": "AMS 和打印历史均未开启",
         "progress.syncStarting": "同步服务启动中",
+        "progress.retrying": "等待网络恢复",
+        "progress.retryingMeta": "{time} 自动重试（第 {attempt} 次）",
         "progress.waitPrinter": "等待打印机连接",
         "progress.connectAfterManual": "连接后执行立即同步",
         "progress.connectingPrinter": "正在连接打印机",
@@ -632,6 +641,7 @@
         "state.on": "On",
         "state.off": "Off",
         "state.starting": "Starting",
+        "state.retrying": "Retrying",
         "state.running": "Running",
         "state.notStarted": "Not started",
         "state.connected": "Connected",
@@ -652,6 +662,7 @@
         "summary.runningCloud": "Running · {status}",
         "summary.runningHistory": "Running · print history enabled",
         "summary.starting": "Starting · {phase}",
+        "summary.retrying": "Network unavailable · retry at {time} (attempt {attempt})",
         "bento.bambuChecking": "Checking Bambu Cloud login...",
         "bento.bambuWait": "Waiting for Bambu Cloud login.",
         "bento.bambuReady": "{region} · {count} device(s) available",
@@ -659,6 +670,7 @@
         "bento.notionReady": "Target ID …{id}",
         "bento.syncWait": "Waiting for sync to be enabled.",
         "bento.syncStarting": "Starting · {phase}",
+        "bento.syncRetrying": "Network temporarily unavailable · retry at {time}",
         "bento.syncRunning": "Running · AMS {ams} · print history {history}",
         "runtime.noService": "Sync service is not started",
         "runtime.service": "Service",
@@ -675,7 +687,11 @@
         "runtime.historyTo": "History synced to",
         "runtime.historyOff": "Print history: off",
         "runtime.phase": "Startup phase",
+        "runtime.retry": "Next automatic retry",
         "runtime.maintenance": "Maintenance: running",
+        "runtime.maintenanceRetry": "Maintenance retry",
+        "runtime.historyRetry": "Print history retry",
+        "runtime.mqttRecovering": "Printer connection is recovering automatically",
         "runtime.manualPending": "Sync now: waiting for connection",
         "runtime.hint": "Hint",
         "overview.ams": "AMS",
@@ -699,6 +715,8 @@
         "progress.waitChooseTitle": "Choose sync data",
         "progress.waitChooseMeta": "AMS and print history are both off",
         "progress.syncStarting": "Sync service is starting",
+        "progress.retrying": "Waiting for the network to recover",
+        "progress.retryingMeta": "Retry at {time} (attempt {attempt})",
         "progress.waitPrinter": "Waiting for printer connection",
         "progress.connectAfterManual": "Will sync after connection",
         "progress.connectingPrinter": "Connecting printer",
@@ -735,6 +753,7 @@
     };
     const SERVER_TEXT_EN = {
       "同步服务正在启动，连接打印机后会自动执行这次同步。": "The sync service is starting. This sync will run after the printer connects.",
+      "同步服务正在等待网络恢复，恢复后会自动执行这次同步。": "The sync service is waiting for the network to recover. This sync will run automatically afterward.",
       "请先打开至少一个同步开关": "Enable at least one sync switch first.",
       "AMS 同步服务尚未运行": "The AMS sync service is not running yet.",
       "AMS 同步正在等待拓竹云连接；连接后会自动执行这次同步。": "AMS sync is waiting for Bambu Cloud connection. It will run automatically after connecting.",
@@ -960,6 +979,10 @@
       return value ? t("state.on") : t("state.off");
     }
 
+    function printerConnected(runtime = {}) {
+      return Boolean(runtime.bambu?.connected && runtime.bambu?.subscribed);
+    }
+
     function phaseText(phase) {
       if (phase === "加载配置") return t("phase.loadConfig");
       if (phase === "初始化 Notion") return t("phase.initNotion");
@@ -968,9 +991,25 @@
       return phase || t("phase.initializing");
     }
 
+    function retryAtTime(value) {
+      const retryAt = Date.parse(value || "");
+      return Number.isFinite(retryAt) ? new Date(retryAt).toLocaleTimeString() : "-";
+    }
+
+    function retryTime(runtime = {}) {
+      return retryAtTime(runtime.nextStartupRetryAt);
+    }
+
+    function retryStatusText(runtime = {}) {
+      return tr("progress.retryingMeta", {
+        time: retryTime(runtime),
+        attempt: runtime.startupRetryAttempt || 1
+      });
+    }
+
     function startupSteps(runtime = {}, flags = { ams: false, printHistory: false }) {
       const printerText = flags.ams
-        ? runtime.bambu?.connected
+        ? printerConnected(runtime)
           ? t("state.connected")
           : t("overview.waiting")
         : t("overview.skip");
@@ -995,12 +1034,12 @@
         printHistory: config.PRINT_TASK_HISTORY_SYNC_ON_START === "true"
       };
       const lines = [
-        t("runtime.service") + ": " + (runtime.starting ? t("state.starting") : runtime.running ? t("state.running") : t("state.notStarted")),
+        t("runtime.service") + ": " + (runtime.starting ? t("state.starting") : runtime.retrying ? t("state.retrying") : runtime.running ? t("state.running") : t("state.notStarted")),
         t("runtime.switches") + ": " + t("runtime.ams") + " " + enabledText(flags.ams) + " · " + t("runtime.printHistory") + " " + enabledText(flags.printHistory)
       ];
       if (flags.ams) {
         lines.push(
-          t("runtime.cloudConnection") + ": " + (runtime.bambu?.connected ? t("state.connected") : t("state.disconnected")),
+          t("runtime.cloudConnection") + ": " + (printerConnected(runtime) ? t("state.connected") : t("state.disconnected")),
           t("runtime.recentAms") + ": " + (runtime.lastSyncAt ? new Date(runtime.lastSyncAt).toLocaleString() : "-"),
           t("runtime.recentTrayCount") + ": " + (runtime.lastTrayCount ?? 0)
         );
@@ -1016,7 +1055,17 @@
         lines.push(t("runtime.historyOff"));
       }
       if (runtime.startupPhase) lines.splice(1, 0, t("runtime.phase") + ": " + phaseText(runtime.startupPhase));
+      if (runtime.retrying) lines.splice(1, 0, t("runtime.retry") + ": " + retryStatusText(runtime));
       if (runtime.maintenanceRunning) lines.push(t("runtime.maintenance"));
+      if (runtime.maintenanceRetrying) {
+        lines.push(t("runtime.maintenanceRetry") + ": " + retryAtTime(runtime.nextMaintenanceRetryAt));
+      }
+      if (runtime.taskHistoryRetrying) {
+        lines.push(t("runtime.historyRetry") + ": " + retryAtTime(runtime.nextTaskHistoryRetryAt));
+      }
+      if (runtime.bambu?.retryingSubscription || runtime.bambu?.retryingTrays || runtime.bambu?.retryingPrinterStatus) {
+        lines.push(t("runtime.mqttRecovering"));
+      }
       if (runtime.pendingManualSync) lines.push(t("runtime.manualPending"));
       if (runtime.lastError) lines.push(t("runtime.hint") + ": " + translateServerText(runtime.lastError));
       return lines.join("\n");
@@ -1024,6 +1073,7 @@
 
     function statusKind(runtime) {
       if (runtime?.starting) return "warn";
+      if (runtime?.retrying) return "warn";
       if (runtime?.running) return "ok";
       if (!runtime?.lastError) return "warn";
       if (runtime.lastError.startsWith("Missing required env:") || runtime.lastError.startsWith("Cannot read Bambu cloud token file")) return "warn";
@@ -1056,8 +1106,19 @@
         };
       }
 
+      if (runtime?.retrying) {
+        return {
+          title: t("progress.retrying"),
+          meta: retryStatusText(runtime),
+          percent: 42,
+          activeIndex: 1,
+          doneUntil: 0,
+          kind: "warn"
+        };
+      }
+
       if (runtime?.running) {
-        if (!runtime.bambu?.connected) {
+        if (!printerConnected(runtime)) {
           return {
             title: t("progress.waitPrinter"),
             meta: runtime.pendingManualSync ? t("progress.connectAfterManual") : t("progress.connectingPrinter"),
@@ -1239,18 +1300,26 @@
       else setStatus("");
       bentoSync.textContent = runtime.starting
         ? tr("bento.syncStarting", { phase: phaseText(runtime.startupPhase || "初始化") })
-        : runtime.running
-          ? tr("bento.syncRunning", { ams: enabledText(flags.ams), history: enabledText(flags.printHistory) })
-          : translateServerText(runtime.lastError) || t("bento.syncWait");
+        : runtime.retrying
+          ? tr("bento.syncRetrying", { time: retryTime(runtime) })
+          : runtime.running
+            ? tr("bento.syncRunning", { ams: enabledText(flags.ams), history: enabledText(flags.printHistory) })
+            : translateServerText(runtime.lastError) || t("bento.syncWait");
       if (runtime.starting) {
         document.querySelector("#syncSummary").textContent = tr("summary.starting", { phase: phaseText(runtime.startupPhase || "初始化") });
         setPill("syncPill", t("state.starting"), "warn");
+      } else if (runtime.retrying) {
+        document.querySelector("#syncSummary").textContent = tr("summary.retrying", {
+          time: retryTime(runtime),
+          attempt: runtime.startupRetryAttempt || 1
+        });
+        setPill("syncPill", t("state.retrying"), "warn");
       } else if (!flags.ams && !flags.printHistory) {
         document.querySelector("#syncSummary").textContent = t("summary.chooseSync");
         setPill("syncPill", t("state.notEnabled"), "warn");
       } else if (runtime.running) {
         document.querySelector("#syncSummary").textContent = flags.ams
-          ? tr("summary.runningCloud", { status: runtime.bambu?.connected ? t("state.connected") : t("state.disconnected") })
+          ? tr("summary.runningCloud", { status: printerConnected(runtime) ? t("state.connected") : t("state.disconnected") })
           : t("summary.runningHistory");
         setPill("syncPill", t("state.running"), "ok");
       } else if (runtime.lastError) {

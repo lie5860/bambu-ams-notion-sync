@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 const DEFAULTS = {
@@ -37,6 +38,7 @@ const DEFAULTS = {
 };
 
 const SECRET_KEYS = new Set(["NOTION_TOKEN", "BAMBU_ACCESS_CODE"]);
+let configMutationQueue = Promise.resolve();
 
 export function configFilePath() {
   return resolve(process.env.APP_CONFIG_FILE || ".app-config.json");
@@ -72,8 +74,9 @@ export async function loadStoredConfig() {
   return { ...DEFAULTS, ...envConfig, ...saved };
 }
 
-export async function saveStoredConfig(config) {
+async function writeStoredConfigFile(config) {
   const file = configFilePath();
+  const temporaryFile = `${file}.${process.pid}.${randomUUID()}.tmp`;
   const sanitized = {};
   for (const [key, fallback] of Object.entries(DEFAULTS)) {
     if (config[key] != null) sanitized[key] = String(config[key]);
@@ -81,8 +84,34 @@ export async function saveStoredConfig(config) {
   }
 
   await mkdir(dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(sanitized, null, 2)}\n`, { mode: 0o600 });
+  try {
+    await writeFile(temporaryFile, `${JSON.stringify(sanitized, null, 2)}\n`, { mode: 0o600 });
+    await rename(temporaryFile, file);
+  } catch (error) {
+    await unlink(temporaryFile).catch(() => {});
+    throw error;
+  }
   return sanitized;
+}
+
+function enqueueConfigMutation(mutation) {
+  const run = configMutationQueue.then(mutation, mutation);
+  configMutationQueue = run.catch(() => {});
+  return run;
+}
+
+export function saveStoredConfig(config) {
+  return enqueueConfigMutation(() => writeStoredConfigFile(config));
+}
+
+export function updateStoredConfig(update) {
+  return enqueueConfigMutation(async () => {
+    const existing = await loadStoredConfig();
+    const next = typeof update === "function"
+      ? await update(existing)
+      : { ...existing, ...update };
+    return writeStoredConfigFile(next);
+  });
 }
 
 export async function resetStoredConfig(preserve = {}) {
